@@ -1,121 +1,54 @@
 # 安忆北京
 
-安忆北京是一套面向纪念、陪伴与社区互助场景的 Android 应用与配套后端服务。项目包含 Android 客户端、Node.js API、本地 SQLite 数据存储、Web 管理后台、官网静态页，以及上线所需的运营与合规模板。
+安忆北京是一款围绕纪念、陪伴与社区互助而设计的应用。它希望把重要的人、重要的记忆和真实的互助需求安放在一个更温和、更有人情味的地方。
 
-## 功能概览
+在这里，你可以建立云端纪念馆，记录想念与祝福；也可以进入人文社区，看到大家发布的动态、故事和互助信息；还可以查看义工招募，了解可以参与的公益与社区服务。
 
-- 人文社区：公开论坛式信息流，用户发布的内容所有人可见，体验接近朋友圈动态。
-- 义工招募：社区入口提供义工招募信息弹窗，便于用户了解参与方式。
-- 云端纪念馆：支持纪念馆资料、献花、点蜡烛、上香和供品等互动。
-- AI 陪伴：支持陪伴对象档案、素材上传与聊天接口。
-- 账号体系：支持账号注册登录、微信登录预留、资料编辑与账号注销流程。
-- Web 管理后台：提供内容审核、审计日志、崩溃日志、账号注销申请等运营工具。
-- 官网页面：`website/` 下提供静态官网素材与示例 Nginx 配置。
+## 你可以用它做什么
 
-## 项目结构
+- **建立纪念馆**：为亲友、师长或重要的人创建纪念空间，保存照片、文字和回忆。
+- **表达思念**：通过献花、点蜡烛、上香、供品等方式，完成一次安静的纪念。
+- **浏览人文社区**：像朋友圈一样查看大家公开发布的内容，读到不同人的故事和近况。
+- **发布动态**：分享文字内容，让更多人看到你的记录、感受或求助信息。
+- **查看义工招募**：通过社区里的小入口了解义工信息，参与力所能及的帮助。
+- **使用 AI 陪伴**：在合适的边界内，用 AI 记录、整理和回应情绪与记忆。
 
-```text
-.
-├── app/                 # Android Compose 客户端
-├── backend/             # Node.js + Hono API 与管理后台
-│   ├── examples/        # systemd / Nginx 部署示例
-│   ├── migrations/      # SQLite 数据库迁移脚本
-│   ├── server/          # Node 运行时适配层
-│   └── src/             # API 主逻辑
-├── docs/                # 上线、合规、安全运营文档
-├── gradle/              # Gradle Wrapper 依赖
-├── store-assets/        # 应用商店与发布素材
-├── tools/               # 项目辅助脚本
-└── website/             # 官网静态页面
-```
+## 适合谁
 
-## 技术栈
+- 想为重要的人保存一份长期纪念的人。
+- 希望把亲情、友情、人生故事认真记录下来的人。
+- 想在一个更安静的社区里阅读和分享真实生活的人。
+- 愿意参与义工、公益、社区互助的人。
+- 需要一个温柔入口来整理思念、告别和陪伴的人。
 
-- Android：Kotlin、Jetpack Compose、Gradle
-- 后端：Node.js、TypeScript、Hono
-- 数据库：SQLite
-- 部署：腾讯云 CVM、Nginx、systemd
-- 管理后台：后端内置 Web 页面
+## 使用方式
 
-## 本地开发
+1. 注册或登录账号。
+2. 进入人文社区，浏览大家公开发布的内容。
+3. 点击发布，写下自己的动态或故事。
+4. 进入纪念馆，创建纪念对象并上传资料。
+5. 通过社区里的义工入口查看招募信息。
+6. 根据需要使用 AI 陪伴与资料整理功能。
 
-### Android 客户端
+## 隐私与安全
 
-```bash
-./gradlew :app:assembleDebug
-```
+安忆北京会尽量减少不必要的数据收集，并把用户资料、纪念内容和社区内容分开管理。公开发布在社区里的内容会被其他用户看到；纪念馆、账号资料和上传素材则会按照产品规则进行保存与管理。
 
-可通过 Gradle 参数覆盖 API 地址：
+使用时请注意：
 
-```bash
-./gradlew :app:assembleDebug -PANYI_API_BASE_URL=https://api.example.com
-```
+- 不要在社区公开发布身份证号、住址、手机号、银行卡等敏感信息。
+- 上传他人照片、语音或资料前，请确认你有合理的使用权限。
+- AI 陪伴不能替代真实的人际沟通、心理咨询、医疗建议或法律建议。
+- 涉及紧急安全、医疗、法律或财务问题时，请优先联系专业机构或身边可信任的人。
 
-微信登录 AppID 可通过参数传入：
+## 当前状态
 
-```bash
-./gradlew :app:assembleDebug -PANYI_WECHAT_APP_ID=wx_your_app_id
-```
+安忆北京仍在持续完善中。现阶段重点是打磨人文社区、纪念馆、义工招募与基础账号体验。部分功能、页面文案和运营规则会继续调整。
 
-### 后端服务
+## 反馈
 
-```bash
-cd backend
-npm install
-cp .env.server.example .env
-npm run check
-npm run server:build
-npm run server:start
-```
+如果你在使用中遇到问题，或希望提出建议，可以通过项目页面提交反馈，也可以联系项目维护者。我们会优先关注影响注册登录、内容发布、纪念馆展示、隐私安全和数据保存的问题。
 
-后端默认会读取 `.env`。生产环境必须替换 `AUTH_SECRET`、微信配置、AI 配置等敏感值，真实密钥不要提交到仓库。
+## 开源说明
 
-## 常用接口
-
-- `GET /health`：健康检查
-- `POST /auth/register`：注册
-- `POST /auth/login`：登录
-- `POST /auth/wechat`：微信登录
-- `GET /me`、`PATCH /me`、`DELETE /me`：当前用户资料与注销
-- `GET /community/posts`、`POST /community/posts`：人文社区帖子
-- `GET /community/volunteer`：义工招募信息
-- `GET /memorials`、`POST /memorials`、`PATCH /memorials/:id`：纪念馆
-- `POST /assets`、`GET /assets/*`：素材上传与读取
-- `GET /admin`：Web 管理后台
-
-更多接口说明见 [backend/README.md](backend/README.md)。
-
-## 部署说明
-
-腾讯云部署参考 [backend/TENCENT_DEPLOY.md](backend/TENCENT_DEPLOY.md)。核心运行方式是：
-
-- Nginx 负责 HTTPS 与反向代理
-- Node.js 后端以 systemd 服务运行
-- SQLite 与上传文件保存在服务器数据目录
-- Android 客户端通过 `ANYI_API_BASE_URL` 指向线上 API
-
-上线前需要完成：
-
-- 域名备案与 HTTPS 证书
-- 微信开放平台 / 小程序相关配置
-- 隐私政策、用户协议和 AI 免责声明 URL
-- 管理员账号与运营审核流程
-- 数据备份和日志留存策略
-
-## 文档
-
-- [上线清单](docs/launch-checklist.md)
-- [安全与运营](docs/security-operations.md)
-- [Web 管理后台说明](docs/admin-web-backend.md)
-- [隐私政策模板](docs/privacy-policy-template.md)
-- [用户协议模板](docs/user-agreement-template.md)
-- [AI 陪伴免责声明模板](docs/ai-disclaimer-template.md)
-
-## 仓库安全
-
-本仓库只应保存源码、配置模板、迁移脚本、文档和项目资源。以下内容不要提交：
-
-- `.env`、真实密钥、Token、证书、签名文件
-- `node_modules/`、Gradle/Android 构建产物
-- 数据库、备份、日志、浏览器缓存和临时输出
-- APK/AAB 成品包和个人文件
+本仓库用于公开展示安忆北京的产品实现与迭代记录。请不要提交真实密钥、账号密码、证书、数据库备份、个人隐私文件或未脱敏的用户数据。
