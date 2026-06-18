@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://anyi.anyibj.cn/sitemap.xml

@@ -1,0 +1,23 @@
+{
+  "name": "anyi-memorial-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server:build": "tsc -p tsconfig.node.json",
+    "server:start": "node dist-node/server/server.js",
+    "server:restart": "npm run server:build && npm run server:start",
+    "asset:delete:process": "powershell -ExecutionPolicy Bypass -File scripts/process-asset-delete-queue.ps1",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.2",
+    "better-sqlite3": "^12.10.0",
+    "dotenv": "^17.4.2",
+    "hono": "^4.7.11"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.8.0",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,10 @@
+AUTH_SECRET=replace-with-a-long-random-secret
+PAYMENT_WEBHOOK_SECRET=replace-with-provider-webhook-secret
+ADMIN_USERNAMES=admin
+PUBLIC_ASSET_BASE_URL=
+ALLOWED_ORIGINS=http://localhost:8787
+RATE_LIMIT_ENABLED=true
+WECHAT_APP_ID=wx_your_mobile_app_id
+WECHAT_APP_SECRET=replace-with-wechat-app-secret
+LEGAL_CONTACT_EMAIL=544908186@qq.com
+LEGAL_CONTACT_PHONE=+8619310425540

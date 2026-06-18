@@ -1,0 +1,56 @@
+# Local IDE and machine state
+*.iml
+.idea/
+.gradle/
+.kotlin/
+.codex_ssh/
+.playwright-cli/
+local.properties
+
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+!.env.*.example
+.dev.vars
+release-signing.properties
+*.jks
+*.keystore
+*.pem
+*.p12
+
+# Build outputs and dependency directories
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+app/build/
+backend/node_modules/
+backend/dist-node/
+node_modules/
+
+# Runtime data, generated QA output, and temporary browser profiles
+backend/backups/
+output/
+tmp/
+temp_generated_assets/
+resume_render/
+*.sqlite
+*.db
+*.log
+
+# Packaged artifacts and archives
+*.apk
+*.aab
+*.aar
+*.tar.gz
+*.zip
+
+# Local personal/exported files that are not part of the product source
+LvHaojie_*.docx
+吕豪杰.pdf
+tools/build_resume.py
+resume_pdf_page1.png
+chrome_test.png
+edge_test.png
+output_xhs_profile.html

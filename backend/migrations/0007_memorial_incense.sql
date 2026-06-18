@@ -1,0 +1,1 @@
+ALTER TABLE memorials ADD COLUMN incense_until INTEGER NOT NULL DEFAULT 0;

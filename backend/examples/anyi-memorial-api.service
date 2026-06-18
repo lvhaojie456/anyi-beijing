@@ -1,0 +1,15 @@
+[Unit]
+Description=Anyi Memorial API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/anyiapp2/backend
+EnvironmentFile=/opt/anyiapp2/backend/.env
+ExecStart=/usr/bin/node /opt/anyiapp2/backend/dist-node/server/server.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
