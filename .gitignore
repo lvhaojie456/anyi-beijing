@@ -50,7 +50,13 @@ resume_render/
 LvHaojie_*.docx
 吕豪杰.pdf
 tools/build_resume.py
-resume_pdf_page1.png
+resume_pdf_page*.png
 chrome_test.png
 edge_test.png
 output_xhs_profile.html
+
+# One-off generated verification images
+generated-smile-*.png
+app-open-check.png
+anyi-open-check.png
+anyi-open-latest.png

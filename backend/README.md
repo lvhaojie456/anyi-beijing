@@ -16,9 +16,14 @@
 - `POST /memorials/:id/fruits`：供品
 - `POST /assets`：上传图片、语音或文本素材到服务器本地目录
 - `GET /assets/*`：读取公开素材
-- `GET /community/posts`：读取所有公开人文社区帖子
-- `POST /community/posts`：发布人文社区帖子
-- `GET /community/volunteer`：读取义工招募信息
+- `GET /community/posts`、`POST /community/posts`：人文社区公开信息流，支持文字和图片动态
+- `POST /community/posts/:id/like`：社区帖子点赞/取消点赞
+- `GET /community/posts/:id/comments`、`POST /community/posts/:id/comments`：社区帖子评论列表与留言
+- `GET /community/volunteer`：社区义工招募信息列表
+- `POST /community/volunteer`：管理员发布义工招募信息
+- `POST /community/volunteer/:id/applications`：用户提交义工报名表
+- `GET /community/volunteer/applications`：管理员查看义工报名审核列表
+- `PATCH /community/volunteer/applications/:id`：管理员通过或拒绝义工报名
 - `GET /ai/profile`、`PATCH /ai/profile`、`POST /ai/unlock`：AI 陪伴档案
 - `GET /ai/companions`、`POST /ai/companions`、`PATCH /ai/companions/:id`：AI 陪伴对象
 - `POST /ai/companions/:id/assets`：AI 素材上传
@@ -33,11 +38,10 @@
 
 ## 本地开发
 
-```bash
-cd backend
+```powershell
+cd D:\Desktop\anyiapp2\backend
 npm install
-cp .env.server.example .env
-npm run check
+Copy-Item .env.server.example .env
 npm run server:build
 npm run server:start
 ```
@@ -47,14 +51,14 @@ npm run server:start
 ```text
 AUTH_SECRET=replace-with-a-long-random-secret
 ADMIN_USERNAMES=admin
-ANYI_DATA_DIR=./data
+ANYI_DATA_DIR=D:\Desktop\anyiapp2\backend\data
 PUBLIC_ASSET_BASE_URL=http://127.0.0.1:8787
 ALLOWED_ORIGINS=http://127.0.0.1:8787,http://localhost:8787,https://api.anyibj.cn
 ```
 
 ## 腾讯云部署
 
-完整步骤见 [TENCENT_DEPLOY.md](TENCENT_DEPLOY.md)。
+完整步骤见 [TENCENT_DEPLOY.md](D:/Desktop/anyiapp2/backend/TENCENT_DEPLOY.md)。
 
 核心路径：
 
@@ -73,12 +77,12 @@ npm run server:build
 npm run server:start
 ```
 
-systemd 服务文件在 [examples/anyi-memorial-api.service](examples/anyi-memorial-api.service)。
+systemd 服务文件在 [examples/anyi-memorial-api.service](D:/Desktop/anyiapp2/backend/examples/anyi-memorial-api.service)。
 
 Nginx 配置在：
 
-- [examples/tencent-nginx-node-api-http.conf](examples/tencent-nginx-node-api-http.conf)
-- [examples/tencent-nginx-node-api.conf](examples/tencent-nginx-node-api.conf)
+- [examples/tencent-nginx-node-api-http.conf](D:/Desktop/anyiapp2/backend/examples/tencent-nginx-node-api-http.conf)
+- [examples/tencent-nginx-node-api.conf](D:/Desktop/anyiapp2/backend/examples/tencent-nginx-node-api.conf)
 
 ## 数据备份
 
@@ -89,12 +93,3 @@ sudo tar -czf /opt/anyi-backup-$(date +%F).tar.gz /var/lib/anyi-memorial-api
 ```
 
 建议每天备份，并同步到独立存储位置。
-
-## 人文社区说明
-
-当前代码的主入口为人文社区：
-
-- 登录用户可以查看所有社区帖子，效果接近公开朋友圈/论坛流。
-- 登录用户可以发布文字动态；图片字段已预留为 `imageUrls`。
-- 义工招募信息由 `/community/volunteer` 提供，App 侧通过小按钮弹出展示。
-- 管理后台可查看社区内容，并继续承担上传审核、账号注销、崩溃日志和审计职责。

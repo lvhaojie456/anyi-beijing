@@ -4,7 +4,7 @@
 
 - 接口限流：Node 服务使用 SQLite 的 `rate_limits` 表按 IP 和接口类别限流。
 - CORS 限制：浏览器请求只允许 `ALLOWED_ORIGINS` 中的域名；Android App 不受浏览器 CORS 影响。
-- 日志审计：管理员社区巡查、上传审核、文件删除队列处理会写入 `audit_logs`。
+- 日志审计：管理员订单操作、验收上传、上传审核、文件删除队列处理会写入 `audit_logs`。
 - 管理员操作记录：`GET /admin/audit-logs` 可查看最近 200 条。
 - 上传内容审核：所有上传都会写入 `upload_reviews`；文本做关键词初筛，图片和音频进入人工待审。
 - 文件删除策略：账号注销或审核拒绝会写入 `asset_delete_queue`，管理员可统一处理本地上传文件删除。
@@ -50,6 +50,6 @@ POST /admin/asset-delete-queue/process
 
 - 把 `ALLOWED_ORIGINS` 改成正式域名。
 - 保持 `LEGAL_CONTACT_EMAIL` 和 `LEGAL_CONTACT_PHONE` 为真实客服信息。
-- 社区内容规则、举报入口和人工巡查流程需要在上线前明确。
+- 支付回调必须接入真实微信支付或支付宝官方验签。
 - 后续接入图片和语音内容安全服务，把 `upload_reviews` 从人工待审升级为自动审核加人工复核。
 - 管理后台建议继续强化：权限分级、登录失败锁定、双因素验证、操作导出。

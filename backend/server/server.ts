@@ -34,7 +34,6 @@ const env = {
   DB: new SqliteDatabaseAdapter(sqlite),
   ASSETS: new LocalAssetBucket(uploadsDir),
   AUTH_SECRET: process.env.AUTH_SECRET || "change-this-auth-secret-before-production",
-  PAYMENT_WEBHOOK_SECRET: process.env.PAYMENT_WEBHOOK_SECRET || "",
   ADMIN_USERNAMES: process.env.ADMIN_USERNAMES || "admin",
   PUBLIC_ASSET_BASE_URL: process.env.PUBLIC_ASSET_BASE_URL || "",
   ALLOWED_ORIGINS:
@@ -44,6 +43,10 @@ const env = {
   AI_BASE_URL: process.env.AI_BASE_URL || "",
   AI_API_KEY: process.env.AI_API_KEY || "",
   AI_MODEL: process.env.AI_MODEL || "",
+  AI_IMAGE_BASE_URL: process.env.AI_IMAGE_BASE_URL || "",
+  AI_IMAGE_API_KEY: process.env.AI_IMAGE_API_KEY || "",
+  AI_IMAGE_MODEL: process.env.AI_IMAGE_MODEL || "",
+  AI_VISION_MODEL: process.env.AI_VISION_MODEL || "",
   AI_TIMEOUT_MS: process.env.AI_TIMEOUT_MS || "20000",
   WECHAT_APP_ID: process.env.WECHAT_APP_ID || "",
   WECHAT_APP_SECRET: process.env.WECHAT_APP_SECRET || "",

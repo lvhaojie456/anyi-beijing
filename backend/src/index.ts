@@ -2,11 +2,11 @@ import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 
 type Role = "user" | "admin";
+
 type Bindings = {
   DB: AppDatabase;
   ASSETS: AssetBucket;
   AUTH_SECRET: string;
-  PAYMENT_WEBHOOK_SECRET?: string;
   ADMIN_USERNAMES?: string;
   PUBLIC_ASSET_BASE_URL?: string;
   ALLOWED_ORIGINS?: string;
@@ -14,6 +14,10 @@ type Bindings = {
   AI_BASE_URL?: string;
   AI_API_KEY?: string;
   AI_MODEL?: string;
+  AI_IMAGE_BASE_URL?: string;
+  AI_IMAGE_API_KEY?: string;
+  AI_IMAGE_MODEL?: string;
+  AI_VISION_MODEL?: string;
   AI_TIMEOUT_MS?: string;
   WECHAT_APP_ID?: string;
   WECHAT_APP_SECRET?: string;
@@ -117,12 +121,54 @@ type MemorialRow = {
 
 type CommunityPostRow = {
   id: string;
-  author_id: string;
+  user_id: string;
+  username: string;
+  display_name: string;
+  avatar_url: string | null;
+  content: string;
+  image_urls?: string | null;
+  created_at: string;
+  updated_at: string;
+  like_count?: number;
+  comment_count?: number;
+  liked_by_me?: number;
+};
+
+type CommunityCommentRow = {
+  id: string;
+  post_id: string;
+  user_id: string;
+  username: string;
+  display_name: string;
+  avatar_url: string | null;
+  content: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type CommunityVolunteerRow = {
+  id: string;
+  title: string;
+  body: string;
+  contact: string | null;
+  image_url?: string | null;
+  created_at: string;
+};
+
+type CommunityVolunteerApplicationRow = {
+  id: string;
+  volunteer_post_id: string;
+  volunteer_title: string;
+  user_id: string;
   username?: string;
   display_name?: string;
   avatar_url?: string | null;
-  content: string;
-  image_urls_json: string;
+  name: string;
+  phone: string;
+  note: string | null;
+  status: "pending" | "approved" | "rejected";
+  reviewer_id: string | null;
+  reviewed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -132,6 +178,8 @@ type AiProfileRow = {
   gender: string;
   relation: string;
   avatar_url: string | null;
+  smile_avatar_url: string | null;
+  avatar_motion_json: string;
   paid_unlocked: number;
   photo_count: number;
   voice_count: number;
@@ -143,6 +191,8 @@ type AiProfileRow = {
 type AiCompanionRow = AiProfileRow & {
   id: string;
   display_name: string;
+  avatar_style_json: string;
+  kernel_json: string;
   is_default: number;
   created_at: string;
 };
@@ -514,6 +564,273 @@ app.delete("/me", requireAuth, async (c) => {
   return c.json({ ok: true });
 });
 
+app.get("/community/posts", requireAuth, async (c) => {
+  const user = c.get("user");
+  const rows = await c.env.DB.prepare(
+    `SELECT p.*, u.username, u.display_name, u.avatar_url,
+      (SELECT COUNT(*) FROM community_post_likes l WHERE l.post_id = p.id) AS like_count,
+      (SELECT COUNT(*) FROM community_post_comments cc WHERE cc.post_id = p.id) AS comment_count,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM community_post_likes l WHERE l.post_id = p.id AND l.user_id = ?
+      ) THEN 1 ELSE 0 END AS liked_by_me
+     FROM community_posts p
+     JOIN users u ON u.id = p.user_id
+     WHERE u.deleted_at IS NULL
+     ORDER BY p.created_at DESC
+     LIMIT 100`
+  )
+    .bind(user.id)
+    .all<CommunityPostRow>();
+
+  return c.json({ posts: rows.results.map(serializeCommunityPost) });
+});
+
+app.post("/community/posts", requireAuth, async (c) => {
+  const user = c.get("user");
+  const body = await parseJson(c);
+  const content = readString(body, "content", { max: 500 });
+  const imageUrls = readStringList(body, "imageUrls", { maxItems: 9, maxLength: 500 });
+  if (!content && imageUrls.length === 0) {
+    throw new ApiError(400, "community_post_empty");
+  }
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await c.env.DB.prepare(
+    "INSERT INTO community_posts (id, user_id, content, image_urls, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+  )
+    .bind(id, user.id, content, JSON.stringify(imageUrls), now, now)
+    .run();
+
+  await writeAudit(c, {
+    action: "community.post.create",
+    targetType: "community_post",
+    targetId: id
+  });
+
+  const post = await loadCommunityPostForUser(c, id, user.id);
+  return c.json({ post: serializeCommunityPost(post) }, 201);
+});
+
+app.get("/community/posts/:id/comments", requireAuth, async (c) => {
+  const user = c.get("user");
+  const post = await loadCommunityPostForUser(c, c.req.param("id"), user.id);
+  const rows = await c.env.DB.prepare(
+    `SELECT cc.*, u.username, u.display_name, u.avatar_url
+     FROM community_post_comments cc
+     JOIN users u ON u.id = cc.user_id
+     WHERE cc.post_id = ? AND u.deleted_at IS NULL
+     ORDER BY cc.created_at ASC
+     LIMIT 200`
+  )
+    .bind(post.id)
+    .all<CommunityCommentRow>();
+
+  return c.json({ comments: rows.results.map(serializeCommunityComment) });
+});
+
+app.post("/community/posts/:id/comments", requireAuth, async (c) => {
+  const user = c.get("user");
+  const post = await loadCommunityPostForUser(c, c.req.param("id"), user.id);
+  const body = await parseJson(c);
+  const content = readString(body, "content", { required: true, max: 300 });
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await c.env.DB.prepare(
+    "INSERT INTO community_post_comments (id, post_id, user_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+  )
+    .bind(id, post.id, user.id, content, now, now)
+    .run();
+
+  await writeAudit(c, {
+    action: "community.comment.create",
+    targetType: "community_post_comment",
+    targetId: id,
+    metadata: { postId: post.id }
+  });
+
+  const comment = await loadCommunityComment(c, id);
+  const updatedPost = await loadCommunityPostForUser(c, post.id, user.id);
+  return c.json({ comment: serializeCommunityComment(comment), post: serializeCommunityPost(updatedPost) }, 201);
+});
+
+app.post("/community/posts/:id/like", requireAuth, async (c) => {
+  const user = c.get("user");
+  const post = await loadCommunityPostForUser(c, c.req.param("id"), user.id);
+  const existing = await c.env.DB.prepare(
+    "SELECT post_id FROM community_post_likes WHERE post_id = ? AND user_id = ?"
+  )
+    .bind(post.id, user.id)
+    .first<{ post_id: string }>();
+
+  if (existing) {
+    await c.env.DB.prepare("DELETE FROM community_post_likes WHERE post_id = ? AND user_id = ?")
+      .bind(post.id, user.id)
+      .run();
+  } else {
+    await c.env.DB.prepare(
+      "INSERT INTO community_post_likes (post_id, user_id, created_at) VALUES (?, ?, ?)"
+    )
+      .bind(post.id, user.id, new Date().toISOString())
+      .run();
+  }
+
+  const updated = await loadCommunityPostForUser(c, post.id, user.id);
+  return c.json({ post: serializeCommunityPost(updated) });
+});
+
+app.get("/community/volunteer", requireAuth, async (c) => {
+  const rows = await c.env.DB.prepare(
+    "SELECT id, title, body, contact, image_url, created_at FROM community_volunteer_posts ORDER BY created_at DESC LIMIT 20"
+  ).all<CommunityVolunteerRow>();
+  const volunteers = rows.results.length > 0 ? rows.results.map(serializeCommunityVolunteer) : defaultCommunityVolunteers();
+  return c.json({ volunteer: volunteers[0], volunteers });
+});
+
+app.post("/community/volunteer", requireAuth, async (c) => {
+  const admin = requireAdmin(c);
+  const body = await parseJson(c);
+  const title = readString(body, "title", { required: true, max: 40 });
+  const volunteerBody = readString(body, "body", { required: true, max: 500 });
+  const contact = readString(body, "contact", { max: 160 }) || null;
+  const imageUrl = readString(body, "imageUrl", { max: 1000 }) || null;
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await c.env.DB.prepare(
+    "INSERT INTO community_volunteer_posts (id, admin_id, title, body, contact, image_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  )
+    .bind(id, admin.id, title, volunteerBody, contact, imageUrl, now)
+    .run();
+
+  await writeAudit(c, {
+    action: "community.volunteer.create",
+    targetType: "community_volunteer_post",
+    targetId: id
+  });
+
+  return c.json(
+    {
+      volunteer: {
+        id,
+        title,
+        body: volunteerBody,
+        contact,
+        imageUrl,
+        createdAt: now
+      }
+    },
+    201
+  );
+});
+
+app.get("/community/volunteer/applications", requireAuth, async (c) => {
+  requireAdmin(c);
+  const status = c.req.query("status") || "pending";
+  if (!["pending", "approved", "rejected", "all"].includes(status)) {
+    throw new ApiError(400, "invalid_volunteer_application_status");
+  }
+
+  const sql = `SELECT a.*, u.username, u.display_name, u.avatar_url
+    FROM community_volunteer_applications a
+    JOIN users u ON u.id = a.user_id
+    ${status === "all" ? "" : "WHERE a.status = ?"}
+    ORDER BY
+      CASE a.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+      a.created_at DESC
+    LIMIT 100`;
+  const rows = status === "all"
+    ? await c.env.DB.prepare(sql).all<CommunityVolunteerApplicationRow>()
+    : await c.env.DB.prepare(sql).bind(status).all<CommunityVolunteerApplicationRow>();
+
+  return c.json({ applications: rows.results.map(serializeCommunityVolunteerApplication) });
+});
+
+app.patch("/community/volunteer/applications/:id", requireAuth, async (c) => {
+  const admin = requireAdmin(c);
+  const body = await parseJson(c);
+  const status = readString(body, "status", { required: true, max: 20 });
+  if (!["approved", "rejected"].includes(status)) {
+    throw new ApiError(400, "invalid_volunteer_application_status");
+  }
+
+  const existing = await c.env.DB.prepare(
+    "SELECT id FROM community_volunteer_applications WHERE id = ?"
+  )
+    .bind(c.req.param("id"))
+    .first<{ id: string }>();
+  if (!existing) {
+    throw new ApiError(404, "volunteer_application_not_found");
+  }
+
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `UPDATE community_volunteer_applications
+     SET status = ?, reviewer_id = ?, reviewed_at = ?, updated_at = ?
+     WHERE id = ?`
+  )
+    .bind(status, admin.id, now, now, existing.id)
+    .run();
+
+  await writeAudit(c, {
+    action: `community.volunteer.application.${status}`,
+    targetType: "community_volunteer_application",
+    targetId: existing.id
+  });
+
+  const application = await loadCommunityVolunteerApplication(c, existing.id);
+  return c.json({ application: serializeCommunityVolunteerApplication(application) });
+});
+
+app.post("/community/volunteer/:id/applications", requireAuth, async (c) => {
+  const user = c.get("user");
+  const volunteer = await loadCommunityVolunteerTarget(c, c.req.param("id"));
+  const body = await parseJson(c);
+  const name = readString(body, "name", { required: true, max: 40 });
+  const phone = readString(body, "phone", { required: true, max: 40 });
+  const note = readString(body, "note", { max: 500 }) || null;
+  const now = new Date().toISOString();
+
+  const existing = await c.env.DB.prepare(
+    "SELECT id FROM community_volunteer_applications WHERE volunteer_post_id = ? AND user_id = ?"
+  )
+    .bind(volunteer.id, user.id)
+    .first<{ id: string }>();
+
+  let applicationId = existing?.id;
+  if (applicationId) {
+    await c.env.DB.prepare(
+      `UPDATE community_volunteer_applications
+       SET volunteer_title = ?, name = ?, phone = ?, note = ?, status = 'pending',
+         reviewer_id = NULL, reviewed_at = NULL, updated_at = ?
+       WHERE id = ?`
+    )
+      .bind(volunteer.title, name, phone, note, now, applicationId)
+      .run();
+  } else {
+    applicationId = crypto.randomUUID();
+    await c.env.DB.prepare(
+      `INSERT INTO community_volunteer_applications (
+        id, volunteer_post_id, volunteer_title, user_id, name, phone, note,
+        status, reviewer_id, reviewed_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)`
+    )
+      .bind(applicationId, volunteer.id, volunteer.title, user.id, name, phone, note, now, now)
+      .run();
+  }
+
+  await writeAudit(c, {
+    action: "community.volunteer.application.create",
+    targetType: "community_volunteer_application",
+    targetId: applicationId,
+    metadata: { volunteerPostId: volunteer.id }
+  });
+
+  const application = await loadCommunityVolunteerApplication(c, applicationId);
+  return c.json({ application: serializeCommunityVolunteerApplication(application) }, existing ? 200 : 201);
+});
+
 app.get("/memorials", requireAuth, async (c) => {
   const user = c.get("user");
   const rows = await c.env.DB.prepare(
@@ -641,7 +958,7 @@ app.post("/memorials/:id/fruits", requireAuth, async (c) => {
       .bind(user.id, durianOfferingFeature)
       .first<{ feature: string }>();
     if (!unlock) {
-      throw new ApiError(402, "durian_offering_requires_unlock");
+      throw new ApiError(402, "durian_offering_requires_payment");
     }
   }
 
@@ -817,10 +1134,24 @@ async function uploadAiCompanionAsset(c: Context<AppEnv>, current: AiCompanionRo
   }
 
   const file = form.get("file");
+  if (kind === "avatar" && file instanceof File && !file.type.startsWith("image/")) {
+    throw new ApiError(415, "unsupported_avatar_type", { type: file.type });
+  }
   const asset = await uploadAsset(c, file, `ai/${kind}`);
+  const avatarImageReference = kind === "avatar" && file instanceof File
+    ? await fileToDataUrl(file)
+    : asset.url;
+  const avatarMotion = kind === "avatar"
+    ? await analyzeAvatarMotion(c, avatarImageReference, current)
+    : parseJsonObject(current.avatar_motion_json);
+  const smileAvatarUrl = kind === "avatar"
+    ? await generateSmilingAvatarVariant(c, avatarImageReference, current, avatarMotion, asset.url)
+    : current.smile_avatar_url;
   const next: AiCompanionRow = {
     ...current,
     avatar_url: kind === "avatar" ? asset.url : current.avatar_url,
+    smile_avatar_url: kind === "avatar" ? smileAvatarUrl : current.smile_avatar_url,
+    avatar_motion_json: normalizeJsonString(JSON.stringify(avatarMotion)),
     photo_count: current.photo_count + (kind === "photo" ? 1 : 0),
     voice_count: current.voice_count + (kind === "voice" ? 1 : 0),
     moment_count: current.moment_count + (kind === "moment" ? 1 : 0)
@@ -830,62 +1161,503 @@ async function uploadAiCompanionAsset(c: Context<AppEnv>, current: AiCompanionRo
   return { asset, profile: updated };
 }
 
-app.get("/community/posts", requireAuth, async (c) => {
-  const rows = await c.env.DB.prepare(
-    `SELECT p.*, u.username AS username, u.display_name AS display_name, u.avatar_url AS avatar_url
-     FROM community_posts p
-     JOIN users u ON u.id = p.author_id
-     WHERE p.deleted_at IS NULL
-     ORDER BY p.created_at DESC
-     LIMIT 200`
-  ).all<CommunityPostRow>();
-  return c.json({ posts: rows.results.map(serializeCommunityPost) });
-});
+async function ensureSmilingAvatarVariant(c: Context<AppEnv>, row: AiCompanionRow) {
+  if (!row.avatar_url || row.smile_avatar_url) {
+    return row;
+  }
 
-app.post("/community/posts", requireAuth, async (c) => {
-  const user = c.get("user");
-  const body = await parseJson(c);
-  const content = readString(body, "content", { required: true, max: 1000 });
-  const imageUrls = readImageUrls(body, "imageUrls");
-  const now = new Date().toISOString();
-  const id = crypto.randomUUID();
+  const avatarMotion = parseJsonObject(row.avatar_motion_json);
+  const smileAvatarUrl = await generateSmilingAvatarVariant(c, row.avatar_url, row, avatarMotion);
+  if (!smileAvatarUrl) {
+    return row;
+  }
+  return saveAiCompanion(c, { ...row, smile_avatar_url: smileAvatarUrl });
+}
 
-  await c.env.DB.prepare(
-    `INSERT INTO community_posts (
-      id, author_id, content, image_urls_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)`
-  )
-    .bind(id, user.id, content, JSON.stringify(imageUrls), now, now)
-    .run();
+async function generateSmilingAvatarVariant(
+  c: Context<AppEnv>,
+  avatarImageReference: string,
+  companion: AiCompanionRow,
+  avatarMotion: Record<string, unknown>,
+  avatarDescriptionReference = avatarImageReference
+) {
+  const env = c.env;
+  const apiKey = (env.AI_IMAGE_API_KEY || env.AI_API_KEY)?.trim();
+  const baseUrl = (env.AI_IMAGE_BASE_URL || env.AI_BASE_URL)?.trim();
+  if (!apiKey || !baseUrl) {
+    return null;
+  }
 
-  await writeAudit(c, {
-    action: "community.post.create",
-    targetType: "community_post",
-    targetId: id,
-    metadata: { imageCount: imageUrls.length }
+  const motion = asRecord(avatarMotion);
+  const confidence = numberValue(motion.confidence, 0);
+  const configuredTimeoutMs = Number(env.AI_TIMEOUT_MS || "20000");
+  const timeoutMs = Number.isFinite(configuredTimeoutMs) ? Math.max(configuredTimeoutMs, 210000) : 210000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const prompt = [
+    "Edit the provided portrait into a realistic smiling avatar for a memorial companion app.",
+    "Keep the same person recognizable. Preserve identity, age, skin tone, hairstyle, clothing, lighting, background, and camera crop as much as possible.",
+    confidence > 0.2
+      ? "A human face has already been detected; keep that face centered and natural."
+      : "If the face is not perfectly centered, keep the main person centered and recognizable.",
+    "Only change the facial expression: make the person show a warm, genuine, natural smile with relaxed eyes.",
+    "Do not cartoonize, beautify aggressively, change clothes, add text, add accessories, or add extra people."
+  ].join(" ");
+  const appearance = await describeAvatarAppearance(c, avatarDescriptionReference, companion);
+  const generationPrompt = [
+    "Generate a warm, realistic smiling portrait avatar for a memorial companion app.",
+    "Use this visual description of the uploaded avatar as the reference, without naming or identifying the person:",
+    appearance,
+    "Keep a similar apparent age, gender presentation, hairstyle, face shape, clothing style, lighting, color mood, and camera crop.",
+    "The person should have a genuine natural smile with relaxed eyes. No text, no extra people, no hats or accessories unless described."
+  ].join(" ");
+
+  try {
+    const model = env.AI_IMAGE_MODEL?.trim() || "gpt-image-1";
+    const image = await requestSmilingAvatarImage(
+      baseUrl,
+      apiKey,
+      model,
+      prompt,
+      generationPrompt,
+      avatarImageReference,
+      avatarDescriptionReference,
+      controller.signal
+    );
+    const asset = await storeGeneratedAsset(c, image.bytes, "ai/avatar-smile", image.mimeType);
+    return asset.url;
+  } catch (error) {
+    console.warn("AI avatar smile fallback:", error instanceof Error ? error.message : String(error));
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function requestSmilingAvatarImage(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  generationPrompt: string,
+  avatarImageReference: string,
+  generationImageReference: string,
+  signal: AbortSignal
+) {
+  const jsonError = await requestSmilingAvatarImageJson(baseUrl, apiKey, model, prompt, avatarImageReference, signal)
+    .then((image) => ({ image, error: null as Error | null }))
+    .catch((error) => ({ image: null, error: error instanceof Error ? error : new Error(String(error)) }));
+  if (jsonError.image) {
+    return jsonError.image;
+  }
+
+  if (!shouldSkipMultipartImageEdit(jsonError.error)) {
+    try {
+      return await requestSmilingAvatarImageFormData(baseUrl, apiKey, model, prompt, avatarImageReference, signal);
+    } catch (error) {
+      const multipartError = error instanceof Error ? error : new Error(String(error));
+      console.warn(`AI avatar image edit multipart failed: ${multipartError.message}`);
+    }
+  }
+
+  try {
+    return await requestSmilingAvatarImageGeneration(baseUrl, apiKey, model, generationPrompt, generationImageReference, signal);
+  } catch (error) {
+    const generationError = error instanceof Error ? error : new Error(String(error));
+    throw new Error(`${jsonError.error?.message || "avatar_smile_json_failed"}; generation:${generationError.message}`);
+  }
+}
+
+function shouldSkipMultipartImageEdit(error: Error | null) {
+  const message = error?.message || "";
+  return message.includes("avatar_smile_json_502") || message.includes("upstream_error");
+}
+
+async function requestSmilingAvatarImageGeneration(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  imageReference: string,
+  signal: AbortSignal
+) {
+  const body: Record<string, unknown> = {
+    model,
+    prompt,
+    size: "1024x1024"
+  };
+  if (imageReference) {
+    body.images = [{ image_url: imageReference }];
+  }
+
+  const response = await fetch(imageGenerationsUrl(baseUrl), {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body),
+    signal
   });
 
-  const row = await loadCommunityPost(c, id);
-  return c.json({ post: serializeCommunityPost(row) }, 201);
-});
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`avatar_smile_generation_${response.status}:${text.slice(0, 160)}`);
+  }
+  return parseGeneratedImageResponse(text);
+}
 
-app.get("/community/volunteer", requireAuth, (c) =>
-  c.json({
-    title: "义工招募",
-    subtitle: "一起维护一个温柔、可信、有人情味的社区",
-    description:
-      "安忆正在招募社区义工，协助整理纪念故事、维护友善讨论、陪伴新用户熟悉社区规则。你可以选择线上参与，不要求固定坐班。",
-    items: [
-      "协助审核公开帖子，提醒用户保护隐私与尊重他人",
-      "整理高质量纪念故事，帮助社区形成温和的公共记忆",
-      "为新用户答疑，反馈社区体验和产品问题"
-    ],
-    contact: {
-      email: legalConfig(c.env).email,
-      phone: legalConfig(c.env).phone
+async function describeAvatarAppearance(c: Context<AppEnv>, avatarUrl: string, companion: AiCompanionRow) {
+  const env = c.env;
+  const apiKey = env.AI_API_KEY?.trim();
+  const baseUrl = env.AI_BASE_URL?.trim();
+  if (!apiKey || !baseUrl) {
+    return `${companion.relation}, ${companion.gender}, close-up portrait avatar.`;
+  }
+
+  const timeoutMs = Math.min(Number(env.AI_TIMEOUT_MS || "20000") || 20000, 30000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(chatCompletionsUrl(baseUrl), {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: env.AI_VISION_MODEL?.trim() || env.AI_MODEL?.trim() || "gpt-5.4-mini",
+        temperature: 0.2,
+        max_tokens: 240,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Describe the visible portrait for image generation. Do not identify the person or infer private identity. Return one concise English paragraph about visual appearance only."
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text:
+                  "Describe this avatar's visual appearance for generating a similar smiling portrait: apparent age range, gender presentation, hairstyle, face shape, clothing, pose, lighting, background, and art/photo style."
+              },
+              {
+                type: "image_url",
+                image_url: { url: avatarUrl }
+              }
+            ]
+          }
+        ]
+      }),
+      signal: controller.signal
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`avatar_description_${response.status}:${text.slice(0, 160)}`);
     }
-  })
-);
+    const data = JSON.parse(text) as {
+      choices?: Array<{ message?: { content?: string }; text?: string }>;
+    };
+    const description = (data.choices?.[0]?.message?.content || data.choices?.[0]?.text || "").trim();
+    return description.slice(0, 900) || `${companion.relation}, ${companion.gender}, close-up portrait avatar.`;
+  } catch (error) {
+    console.warn("AI avatar description fallback:", error instanceof Error ? error.message : String(error));
+    return `${companion.relation}, ${companion.gender}, close-up portrait avatar.`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function requestSmilingAvatarImageFormData(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  avatarImageReference: string,
+  signal: AbortSignal
+) {
+  const source = await imageReferenceToBlob(avatarImageReference);
+  const form = new FormData();
+  form.append("model", model);
+  form.append("prompt", prompt);
+  form.append("image", source.blob, source.fileName);
+
+  const response = await fetch(imageEditsUrl(baseUrl), {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`
+    },
+    body: form,
+    signal
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`avatar_smile_multipart_${response.status}:${text.slice(0, 160)}`);
+  }
+  return parseGeneratedImageResponse(text);
+}
+
+async function requestSmilingAvatarImageJson(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  prompt: string,
+  avatarImageReference: string,
+  signal: AbortSignal
+) {
+  const response = await fetch(imageEditsUrl(baseUrl), {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      images: [{ image_url: avatarImageReference }]
+    }),
+    signal
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`avatar_smile_json_${response.status}:${text.slice(0, 160)}`);
+  }
+  return parseGeneratedImageResponse(text);
+}
+
+async function parseGeneratedImageResponse(text: string) {
+  const data = JSON.parse(text) as {
+    data?: Array<{ b64_json?: string; url?: string; mime_type?: string }>;
+  };
+  const first = data.data?.[0];
+  const imageBase64 = first?.b64_json?.trim();
+  if (imageBase64) {
+    const mimeType = first?.mime_type || imageBase64.match(/^data:([^;]+);base64,/)?.[1] || "image/png";
+    const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, "");
+    const bytes = Buffer.from(cleanBase64, "base64");
+    if (!bytes.byteLength) {
+      throw new Error("empty_avatar_smile_bytes");
+    }
+    return { bytes, mimeType };
+  }
+
+  const url = first?.url?.trim();
+  if (!url) {
+    throw new Error("empty_avatar_smile_image");
+  }
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`avatar_smile_url_fetch_${response.status}`);
+  }
+  const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.byteLength) {
+    throw new Error("empty_avatar_smile_url_bytes");
+  }
+  return { bytes, mimeType };
+}
+
+async function imageReferenceToBlob(imageReference: string) {
+  if (imageReference.startsWith("data:")) {
+    const match = imageReference.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) {
+      throw new Error("invalid_avatar_data_url");
+    }
+    const mimeType = match[1] || "image/png";
+    const bytes = Buffer.from(match[2], "base64");
+    return {
+      blob: new Blob([bytes], { type: mimeType }),
+      fileName: `avatar${allowedAssetTypes.get(mimeType) || ".png"}`
+    };
+  }
+
+  const response = await fetch(imageReference);
+  if (!response.ok) {
+    throw new Error(`avatar_source_fetch_${response.status}`);
+  }
+  const mimeType = response.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
+  const bytes = await response.arrayBuffer();
+  return {
+    blob: new Blob([bytes], { type: mimeType }),
+    fileName: `avatar${allowedAssetTypes.get(mimeType) || ".png"}`
+  };
+}
+
+async function storeGeneratedAsset(c: Context<AppEnv>, bytes: Uint8Array, scope: string, mimeType: string) {
+  const user = c.get("user");
+  const id = crypto.randomUUID();
+  const extension = allowedAssetTypes.get(mimeType) || ".png";
+  const key = `${user.id}/${scope}/${id}${extension}`;
+
+  await c.env.ASSETS.put(key, bytes, {
+    httpMetadata: {
+      contentType: mimeType
+    },
+    customMetadata: {
+      ownerId: user.id
+    }
+  });
+
+  const url = assetUrl(c, key);
+  await c.env.DB.prepare(
+    "INSERT INTO assets (id, owner_id, asset_key, url, mime_type, size_bytes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  )
+    .bind(id, user.id, key, url, mimeType, bytes.byteLength, new Date().toISOString())
+    .run();
+
+  return {
+    id,
+    key,
+    url,
+    mimeType,
+    sizeBytes: bytes.byteLength
+  };
+}
+
+async function analyzeAvatarMotion(c: Context<AppEnv>, avatarUrl: string, companion: AiCompanionRow) {
+  const env = c.env;
+  const apiKey = env.AI_API_KEY?.trim();
+  const baseUrl = env.AI_BASE_URL?.trim();
+  if (!apiKey || !baseUrl) {
+    return defaultAvatarMotion("fallback_no_ai");
+  }
+
+  const timeoutMs = Number(env.AI_TIMEOUT_MS || "20000");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 20000);
+
+  try {
+    const response = await fetch(chatCompletionsUrl(baseUrl), {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: env.AI_VISION_MODEL?.trim() || env.AI_MODEL?.trim() || "gpt-5.4-mini",
+        temperature: 0,
+        max_tokens: 500,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a face-motion calibration service. Return JSON only. " +
+              "Find the main human face in the image and estimate normalized coordinates from 0 to 1 for face and mouth. " +
+              "Use the image coordinate system: x/y are center points, w/h are box sizes. Do not identify the person."
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text:
+                  "Analyze this avatar for dynamic smile and mouth animation. Return exactly this JSON shape: " +
+                  "{\"face\":{\"x\":0.5,\"y\":0.46,\"w\":0.48,\"h\":0.58}," +
+                  "\"mouth\":{\"x\":0.5,\"y\":0.66,\"w\":0.2,\"h\":0.07}," +
+                  "\"confidence\":0.0,\"expression\":\"neutral\"}"
+              },
+              {
+                type: "image_url",
+                image_url: { url: avatarUrl }
+              }
+            ]
+          }
+        ]
+      }),
+      signal: controller.signal
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`avatar_motion_api_${response.status}:${text.slice(0, 160)}`);
+    }
+    const data = JSON.parse(text) as {
+      choices?: Array<{ message?: { content?: string }; text?: string }>;
+    };
+    const content = data.choices?.[0]?.message?.content || data.choices?.[0]?.text || "";
+    return normalizeAvatarMotion(parseJsonObjectFromAiText(content), "ai_ready");
+  } catch (error) {
+    console.warn("AI avatar motion fallback:", error instanceof Error ? error.message : String(error));
+    return defaultAvatarMotion("fallback_ai_failed");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseJsonObjectFromAiText(text: string) {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  const candidate = fenced || (firstBrace >= 0 && lastBrace > firstBrace ? trimmed.slice(firstBrace, lastBrace + 1) : trimmed);
+  try {
+    const parsed = JSON.parse(candidate);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeAvatarMotion(value: Record<string, unknown>, status: string) {
+  const face = normalizeMotionBox(asRecord(value.face), { x: 0.5, y: 0.46, w: 0.5, h: 0.58 });
+  const mouth = normalizeMotionBox(asRecord(value.mouth), {
+    x: face.x,
+    y: Math.min(0.88, face.y + face.h * 0.34),
+    w: face.w * 0.34,
+    h: face.h * 0.1
+  });
+  return {
+    version: 1,
+    status,
+    source: status === "ai_ready" ? "ai_vision" : "fallback",
+    face,
+    mouth,
+    confidence: clampNumber(numberValue(value.confidence, status === "ai_ready" ? 0.65 : 0), 0, 1),
+    expression: String(value.expression || "neutral").slice(0, 40)
+  };
+}
+
+function defaultAvatarMotion(status: string) {
+  return normalizeAvatarMotion({}, status);
+}
+
+async function fileToDataUrl(file: File) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return `data:${file.type};base64,${btoa(binary)}`;
+}
+
+function normalizeMotionBox(value: Record<string, unknown>, fallback: { x: number; y: number; w: number; h: number }) {
+  const w = clampNumber(numberValue(value.w, fallback.w), 0.05, 1);
+  const h = clampNumber(numberValue(value.h, fallback.h), 0.03, 1);
+  return {
+    x: clampNumber(numberValue(value.x, fallback.x), w / 2, 1 - w / 2),
+    y: clampNumber(numberValue(value.y, fallback.y), h / 2, 1 - h / 2),
+    w,
+    h
+  };
+}
+
+function asRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function numberValue(value: unknown, fallback: number) {
+  const next = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 app.get("/legal/privacy", (c) => {
   const legal = legalConfig(c.env);
@@ -899,19 +1671,18 @@ app.get("/legal/privacy", (c) => {
         <ul>
           <li>账号信息：用户名、昵称、登录凭证、账号角色。</li>
           <li>纪念馆信息：纪念对象姓名、纪念照片、献花记录、蜡烛倒计时。</li>
-          <li>人文社区信息：公开帖子、发布者昵称、头像、发布时间和互动所需信息。</li>
-          <li>义工招募信息：用户主动咨询或报名时提供的联系方式和意向说明。</li>
+          <li>人文社区信息：帖子内容、点赞记录、义工招募互动信息。</li>
           <li>AI 陪伴素材：头像、生活照片、语音、朋友圈或文本素材、聊天记录。</li>
           <li>设备与日志信息：网络请求、异常日志、必要的安全审计记录。</li>
         </ul>
         <h2>使用目的</h2>
-        <p>我们使用上述信息用于注册登录、纪念馆展示、人文社区内容展示、义工招募沟通、AI 陪伴体验、客服支持、安全风控和合规审计。</p>
+        <p>我们使用上述信息用于注册登录、纪念馆展示、人文社区互动、义工招募、AI 陪伴体验、客服支持、安全风控和合规审计。</p>
         <h2>共享与委托处理</h2>
-        <p>我们可能向云服务商、对象存储/CDN、客服和必要的运营人员共享完成服务所必需的信息。涉及监管、司法或法律要求时，我们将依法配合。</p>
+        <p>我们可能向云服务商、对象存储/CDN、支付服务商、客服和履约人员共享完成服务所必需的信息。涉及监管、司法或法律要求时，我们将依法配合。</p>
         <h2>上传授权</h2>
         <p>用户上传逝者或他人的照片、语音、社交内容前，应确认自己拥有合法授权，并已取得必要权利人或近亲属同意。</p>
         <h2>保存与删除</h2>
-        <p>用户可在 App 内注销账号，也可通过 <a href="/legal/account-deletion">账号注销页面</a> 提交删除请求。因安全审计、纠纷处理或法律要求必须保存的信息，将在必要期限内保存。</p>
+        <p>用户可在 App 内注销账号，也可通过 <a href="/legal/account-deletion">账号注销页面</a> 提交删除请求。因支付、退款、对账、税务、纠纷或法律要求必须保存的信息，将在必要期限内保存。</p>
         <h2>联系我们</h2>
         <p>邮箱：${escapeHtml(legal.email)}；电话：${escapeHtml(legal.phone)}</p>
       `
@@ -928,17 +1699,15 @@ app.get("/legal/terms", (c) => {
       `
         <p>本协议是用户与 ${legal.operator} 就使用 ${legal.appName} 服务所订立的协议。</p>
         <h2>服务内容</h2>
-        <p>${legal.appName} 提供云端纪念馆、AI 陪伴、人文社区、义工招募信息和账号资料管理等服务。</p>
+        <p>${legal.appName} 提供云端纪念馆、AI 陪伴、人文社区、义工招募信息和账号支持等服务。</p>
         <h2>账号规则</h2>
         <p>用户应提供真实、合法、有效的信息，不得冒用他人身份，不得上传违法、侵权、虚假或伤害他人权益的内容。</p>
         <h2>人文社区</h2>
-        <p>用户可发布公开社区帖子。所有登录用户均可查看社区内容。请勿发布他人隐私、商业广告、攻击性言论或未经授权的图片与文字。</p>
-        <h2>义工招募</h2>
-        <p>义工招募信息用于说明社区协作方向。用户如主动联系或报名，应确保提供的联系方式真实且授权平台用于后续沟通。</p>
+        <p>用户可在社区发布内容并参与点赞互动。发布内容应尊重他人，不得包含违法、侵权、辱骂、诈骗或明显伤害他人的信息。</p>
         <h2>AI 陪伴</h2>
         <p>AI 陪伴为生成式或模拟互动体验，不代表逝者本人真实表达，也不构成专业建议。</p>
         <h2>禁止行为</h2>
-        <p>不得上传违法、侵权、诈骗、辱骂、恐吓、低俗内容；不得破坏系统安全、发布垃圾信息或批量恶意注册。</p>
+        <p>不得上传违法、侵权、诈骗、辱骂、恐吓、低俗内容；不得破坏系统安全、绕过支付或批量恶意注册。</p>
         <h2>联系方式</h2>
         <p>邮箱：${escapeHtml(legal.email)}；电话：${escapeHtml(legal.phone)}</p>
       `
@@ -981,7 +1750,7 @@ app.get("/legal/account-deletion", (c) => {
         <h2>删除范围</h2>
         <ul>
           <li>将删除或匿名化账号资料、纪念馆资料、AI 陪伴素材、聊天记录、普通上传文件。</li>
-          <li>风控、纠纷、安全审计和法律合规所需记录可能在必要期限内保留。</li>
+          <li>订单、支付、退款、税务、风控、纠纷和法律合规所需记录可能在必要期限内保留。</li>
         </ul>
         <h2>提交删除请求</h2>
         <form method="post" action="/legal/account-deletion/request">
@@ -1188,7 +1957,7 @@ function corsResponseHeaders(origin?: string) {
   headers.set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
   headers.set(
     "Access-Control-Allow-Headers",
-    "Authorization,Content-Type,x-anyi-webhook-secret"
+    "Authorization,Content-Type"
   );
   headers.set("Access-Control-Max-Age", "86400");
   return headers;
@@ -1211,7 +1980,7 @@ function rateLimitPolicy(c: Context<AppEnv>) {
   if (path === "/crash-reports") {
     return { routeKey: "crash", scope: "ip", limit: 20, windowMs: 60_000 };
   }
-  if (path.includes("/assets") || path.includes("/acceptance")) {
+  if (path.includes("/assets")) {
     return { routeKey: "upload", scope: "ip", limit: 20, windowMs: 60_000 };
   }
   if (c.req.method === "GET") {
@@ -1402,6 +2171,37 @@ function readString(
   return value;
 }
 
+function readStringList(
+  body: Record<string, unknown>,
+  key: string,
+  options: { maxItems?: number; maxLength?: number } = {}
+) {
+  const raw = body[key];
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    throw new ApiError(400, `${key}_must_be_array`);
+  }
+
+  const maxItems = options.maxItems ?? 20;
+  const maxLength = options.maxLength ?? 500;
+  if (raw.length > maxItems) {
+    throw new ApiError(400, `${key}_too_many`, { maxItems });
+  }
+
+  return raw.map((item, index) => {
+    if (typeof item !== "string") {
+      throw new ApiError(400, `${key}_${index}_must_be_string`);
+    }
+    const value = item.trim();
+    if (value.length > maxLength) {
+      throw new ApiError(400, `${key}_${index}_too_long`, { maxLength });
+    }
+    return value;
+  }).filter(Boolean);
+}
+
 function readNumber(
   body: Record<string, unknown>,
   key: string,
@@ -1421,34 +2221,6 @@ function readNumber(
     throw new ApiError(400, `${key}_too_small`, { min: options.min });
   }
   return Math.round(raw);
-}
-
-function readImageUrls(body: Record<string, unknown>, key: string) {
-  const raw = body[key];
-  if (raw === undefined || raw === null) {
-    return [];
-  }
-  if (!Array.isArray(raw)) {
-    throw new ApiError(400, `${key}_must_be_array`);
-  }
-  return raw
-    .slice(0, 6)
-    .map((item) => {
-      if (typeof item !== "string") {
-        throw new ApiError(400, `${key}_must_be_string_array`);
-      }
-      return item.trim();
-    })
-    .filter(Boolean)
-    .map((item) => {
-      if (item.length > 500) {
-        throw new ApiError(400, `${key}_too_long`, { max: 500 });
-      }
-      if (!item.startsWith("/") && !item.startsWith("http://") && !item.startsWith("https://")) {
-        throw new ApiError(400, `${key}_invalid_url`);
-      }
-      return item;
-    });
 }
 
 async function exchangeWechatCode(appId: string, appSecret: string, code: string) {
@@ -1780,21 +2552,6 @@ function safeScope(scope: string) {
   return scope.replace(/[^a-zA-Z0-9/_-]/g, "_").replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
 }
 
-async function loadCommunityPost(c: Context<AppEnv>, id: string) {
-  const row = await c.env.DB.prepare(
-    `SELECT p.*, u.username AS username, u.display_name AS display_name, u.avatar_url AS avatar_url
-     FROM community_posts p
-     JOIN users u ON u.id = p.author_id
-     WHERE p.id = ? AND p.deleted_at IS NULL`
-  )
-    .bind(id)
-    .first<CommunityPostRow>();
-  if (!row) {
-    throw new ApiError(404, "community_post_not_found");
-  }
-  return row;
-}
-
 function serializeMemorial(row: MemorialRow) {
   const now = Date.now();
   const candleUntilList = parseNumberArray(row.candle_until_json || "[]").filter((timestamp) => timestamp > now);
@@ -1820,15 +2577,161 @@ function serializeMemorial(row: MemorialRow) {
 function serializeCommunityPost(row: CommunityPostRow) {
   return {
     id: row.id,
-    authorId: row.author_id,
-    username: row.username,
-    displayName: row.display_name || row.username || "安忆用户",
-    avatarUrl: row.avatar_url,
+    authorId: row.user_id,
+    authorName: row.display_name || row.username,
+    authorUsername: row.username,
+    authorAvatarUrl: row.avatar_url || null,
     content: row.content,
-    imageUrls: parseStringArray(row.image_urls_json),
+    imageUrls: parseStringArray(row.image_urls || "[]"),
+    likeCount: Number(row.like_count || 0),
+    commentCount: Number(row.comment_count || 0),
+    likedByMe: Boolean(row.liked_by_me),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
+}
+
+function serializeCommunityComment(row: CommunityCommentRow) {
+  return {
+    id: row.id,
+    postId: row.post_id,
+    authorId: row.user_id,
+    authorName: row.display_name || row.username,
+    authorUsername: row.username,
+    authorAvatarUrl: row.avatar_url || null,
+    content: row.content,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function serializeCommunityVolunteer(row: CommunityVolunteerRow) {
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    contact: row.contact,
+    imageUrl: row.image_url || null,
+    createdAt: row.created_at
+  };
+}
+
+function serializeCommunityVolunteerApplication(row: CommunityVolunteerApplicationRow) {
+  return {
+    id: row.id,
+    volunteerPostId: row.volunteer_post_id,
+    volunteerTitle: row.volunteer_title,
+    applicantId: row.user_id,
+    applicantName: row.display_name || row.username || row.name,
+    applicantUsername: row.username || "",
+    applicantAvatarUrl: row.avatar_url || null,
+    name: row.name,
+    phone: row.phone,
+    note: row.note || "",
+    status: row.status,
+    reviewerId: row.reviewer_id,
+    reviewedAt: row.reviewed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function defaultCommunityVolunteers() {
+  return [
+    {
+      id: "default-story",
+      title: "故事整理义工",
+      body: "协助家属整理纪念故事、照片说明和人生片段，让重要记忆被温柔地保存下来。",
+      contact: "在人文社区留言“故事义工”，安忆团队会联系你。",
+      createdAt: "2026-06-05T00:00:00.000Z"
+    },
+    {
+      id: "default-companion",
+      title: "陪伴倾听义工",
+      body: "为需要倾诉的人提供耐心、克制、尊重边界的陪伴，帮他们把想念慢慢说出来。",
+      contact: "在人文社区留言“陪伴义工”报名。",
+      createdAt: "2026-06-05T00:00:00.000Z"
+    },
+    {
+      id: "default-offline",
+      title: "线下互助义工",
+      body: "参与纪念活动协助、物资整理和线下互助，让社区里的善意真正落到日常里。",
+      contact: "在人文社区留言“线下义工”报名。",
+      createdAt: "2026-06-05T00:00:00.000Z"
+    }
+  ];
+}
+
+async function loadCommunityVolunteerTarget(c: Context<AppEnv>, volunteerId: string) {
+  const row = await c.env.DB.prepare(
+    "SELECT id, title, body, contact, image_url, created_at FROM community_volunteer_posts WHERE id = ?"
+  )
+    .bind(volunteerId)
+    .first<CommunityVolunteerRow>();
+  if (row) {
+    return { id: row.id, title: row.title };
+  }
+
+  const fallback = defaultCommunityVolunteers().find((item) => item.id === volunteerId);
+  if (fallback) {
+    return { id: fallback.id, title: fallback.title };
+  }
+
+  throw new ApiError(404, "community_volunteer_not_found");
+}
+
+async function loadCommunityVolunteerApplication(c: Context<AppEnv>, applicationId: string) {
+  const row = await c.env.DB.prepare(
+    `SELECT a.*, u.username, u.display_name, u.avatar_url
+     FROM community_volunteer_applications a
+     JOIN users u ON u.id = a.user_id
+     WHERE a.id = ?`
+  )
+    .bind(applicationId)
+    .first<CommunityVolunteerApplicationRow>();
+
+  if (!row) {
+    throw new ApiError(404, "volunteer_application_not_found");
+  }
+  return row;
+}
+
+async function loadCommunityPostForUser(c: Context<AppEnv>, postId: string, userId: string) {
+  const row = await c.env.DB.prepare(
+    `SELECT p.*, u.username, u.display_name, u.avatar_url,
+      (SELECT COUNT(*) FROM community_post_likes l WHERE l.post_id = p.id) AS like_count,
+      (SELECT COUNT(*) FROM community_post_comments cc WHERE cc.post_id = p.id) AS comment_count,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM community_post_likes l WHERE l.post_id = p.id AND l.user_id = ?
+      ) THEN 1 ELSE 0 END AS liked_by_me
+     FROM community_posts p
+     JOIN users u ON u.id = p.user_id
+     WHERE p.id = ?`
+  )
+    .bind(userId, postId)
+    .first<CommunityPostRow>();
+
+  if (!row) {
+    throw new ApiError(404, "community_post_not_found");
+  }
+
+  return row;
+}
+
+async function loadCommunityComment(c: Context<AppEnv>, commentId: string) {
+  const row = await c.env.DB.prepare(
+    `SELECT cc.*, u.username, u.display_name, u.avatar_url
+     FROM community_post_comments cc
+     JOIN users u ON u.id = cc.user_id
+     WHERE cc.id = ?`
+  )
+    .bind(commentId)
+    .first<CommunityCommentRow>();
+
+  if (!row) {
+    throw new ApiError(404, "community_comment_not_found");
+  }
+  return row;
 }
 
 async function loadDefaultAiCompanion(c: Context<AppEnv>) {
@@ -1839,28 +2742,37 @@ async function loadDefaultAiCompanion(c: Context<AppEnv>) {
     .bind(user.id)
     .first<AiCompanionRow>();
   if (existing) {
-    return existing;
+    return ensureSmilingAvatarVariant(c, existing);
   }
 
   const legacy = await c.env.DB.prepare("SELECT * FROM ai_profiles WHERE user_id = ?")
     .bind(user.id)
     .first<AiProfileRow>();
 
-  return createAiCompanion(c, {
+  const created = await createAiCompanion(c, {
     displayName: legacy?.relation || "母亲",
     gender: legacy?.gender || "女性",
     relation: legacy?.relation || "母亲",
     avatarUrl: legacy?.avatar_url || "",
+    avatarMotionJson: "{}",
     paidUnlocked: legacy?.paid_unlocked || 0,
     photoCount: legacy?.photo_count || 0,
     voiceCount: legacy?.voice_count || 0,
     momentCount: legacy?.moment_count || 0,
     generated: legacy?.generated || 0,
+    avatarStyleJson: "{}",
+    kernelJson: "{}",
     isDefault: true
   });
+  return ensureSmilingAvatarVariant(c, created);
 }
 
 async function loadAiCompanion(c: Context<AppEnv>, id: string) {
+  const row = await loadAiCompanionRow(c, id);
+  return ensureSmilingAvatarVariant(c, row);
+}
+
+async function loadAiCompanionRow(c: Context<AppEnv>, id: string) {
   const user = c.get("user");
   const row = await c.env.DB.prepare("SELECT * FROM ai_companions WHERE id = ? AND user_id = ?")
     .bind(id, user.id)
@@ -1878,11 +2790,15 @@ async function createAiCompanion(
     gender?: string;
     relation?: string;
     avatarUrl?: string;
+    smileAvatarUrl?: string;
+    avatarMotionJson?: string;
     paidUnlocked?: number;
     photoCount?: number;
     voiceCount?: number;
     momentCount?: number;
     generated?: number;
+    avatarStyleJson?: string;
+    kernelJson?: string;
     isDefault?: boolean;
   }
 ) {
@@ -1896,11 +2812,15 @@ async function createAiCompanion(
     gender: input.gender || "不限定",
     relation,
     avatar_url: input.avatarUrl || null,
+    smile_avatar_url: input.smileAvatarUrl || null,
+    avatar_motion_json: normalizeJsonString(input.avatarMotionJson),
     paid_unlocked: input.paidUnlocked || 0,
     photo_count: input.photoCount || 0,
     voice_count: input.voiceCount || 0,
     moment_count: input.momentCount || 0,
     generated: input.generated || 0,
+    avatar_style_json: normalizeJsonString(input.avatarStyleJson),
+    kernel_json: normalizeJsonString(input.kernelJson),
     is_default: input.isDefault ? 1 : 0,
     created_at: now,
     updated_at: now
@@ -1921,7 +2841,16 @@ async function updateAiCompanionFromBody(c: Context<AppEnv>, current: AiCompanio
   const avatarUrl = "avatarUrl" in body
     ? readString(body, "avatarUrl", { max: 500 }) || null
     : current.avatar_url;
+  const smileAvatarUrl = "smileAvatarUrl" in body
+    ? readString(body, "smileAvatarUrl", { max: 500 }) || null
+    : ("avatarUrl" in body ? null : current.smile_avatar_url);
   const generated = "generated" in body ? readBoolean(body, "generated", Boolean(current.generated)) : Boolean(current.generated);
+  const avatarStyleJson = "avatarStyleJson" in body
+    ? readString(body, "avatarStyleJson", { max: 12000 }) || current.avatar_style_json
+    : current.avatar_style_json;
+  const kernelJson = "kernelJson" in body
+    ? readString(body, "kernelJson", { max: 12000 }) || current.kernel_json
+    : current.kernel_json;
 
   return saveAiCompanion(c, {
     ...current,
@@ -1929,7 +2858,10 @@ async function updateAiCompanionFromBody(c: Context<AppEnv>, current: AiCompanio
     gender,
     relation,
     avatar_url: avatarUrl,
-    generated: generated ? 1 : 0
+    smile_avatar_url: smileAvatarUrl,
+    generated: generated ? 1 : 0,
+    avatar_style_json: normalizeJsonString(avatarStyleJson),
+    kernel_json: normalizeJsonString(kernelJson)
   });
 }
 
@@ -1942,19 +2874,23 @@ async function saveAiCompanion(c: Context<AppEnv>, profile: AiCompanionRow) {
   const updatedAt = new Date().toISOString();
   await c.env.DB.prepare(
     `INSERT INTO ai_companions (
-      id, user_id, display_name, gender, relation, avatar_url, paid_unlocked,
-      photo_count, voice_count, moment_count, generated, is_default, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, user_id, display_name, gender, relation, avatar_url, smile_avatar_url, avatar_motion_json, paid_unlocked,
+      photo_count, voice_count, moment_count, generated, avatar_style_json, kernel_json, is_default, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       display_name = excluded.display_name,
       gender = excluded.gender,
       relation = excluded.relation,
       avatar_url = excluded.avatar_url,
+      smile_avatar_url = excluded.smile_avatar_url,
+      avatar_motion_json = excluded.avatar_motion_json,
       paid_unlocked = excluded.paid_unlocked,
       photo_count = excluded.photo_count,
       voice_count = excluded.voice_count,
       moment_count = excluded.moment_count,
       generated = excluded.generated,
+      avatar_style_json = excluded.avatar_style_json,
+      kernel_json = excluded.kernel_json,
       is_default = excluded.is_default,
       updated_at = excluded.updated_at`
   )
@@ -1965,18 +2901,22 @@ async function saveAiCompanion(c: Context<AppEnv>, profile: AiCompanionRow) {
       profile.gender,
       profile.relation,
       profile.avatar_url,
+      profile.smile_avatar_url,
+      profile.avatar_motion_json,
       profile.paid_unlocked,
       profile.photo_count,
       profile.voice_count,
       profile.moment_count,
       profile.generated,
+      profile.avatar_style_json,
+      profile.kernel_json,
       profile.is_default,
       profile.created_at,
       updatedAt
     )
     .run();
 
-  return loadAiCompanion(c, profile.id);
+  return loadAiCompanionRow(c, profile.id);
 }
 
 async function listAiMessages(c: Context<AppEnv>, companionId: string, includeLegacyNull: boolean) {
@@ -2034,6 +2974,10 @@ function serializeAiCompanion(row: AiCompanionRow) {
     gender: row.gender,
     relation: row.relation,
     avatarUrl: row.avatar_url,
+    smileAvatarUrl: row.smile_avatar_url,
+    avatarMotion: parseJsonObject(row.avatar_motion_json),
+    avatarStyle: parseJsonObject(row.avatar_style_json),
+    kernel: parseJsonObject(row.kernel_json),
     paidUnlocked: Boolean(row.paid_unlocked),
     photoCount: row.photo_count,
     voiceCount: row.voice_count,
@@ -2059,7 +3003,7 @@ async function companionReply(env: Bindings, profile: AiCompanionRow, history: A
   const apiKey = env.AI_API_KEY?.trim();
   const baseUrl = env.AI_BASE_URL?.trim();
   if (!apiKey || !baseUrl) {
-    return localCompanionReply(profile.relation, content);
+    return localCompanionReply(profile, content);
   }
 
   const timeoutMs = Number(env.AI_TIMEOUT_MS || "20000");
@@ -2085,6 +3029,7 @@ async function companionReply(env: Bindings, profile: AiCompanionRow, history: A
               "Speak in a voice appropriate to the selected companion identity and relationship. " +
               "Be warm, restrained, brief, and emotionally supportive. Do not over-explain your rules. Do not claim to actually be the deceased. " +
               "Do not fabricate specific real-life memories. If the user expresses self-harm or immediate danger, suggest contacting trusted people or local emergency/professional support. " +
+              "The companion's avatar design and core settings are provided in the prompt below. Use them naturally to shape tone and address style, but do not mention them as settings. " +
               "All user/profile text below is UTF-8 Base64; decode it before reasoning, but never expose the Base64."
           },
           {
@@ -2112,13 +3057,15 @@ async function companionReply(env: Bindings, profile: AiCompanionRow, history: A
     return cleanReply.slice(0, 1800);
   } catch (error) {
     console.warn("AI companion fallback:", error instanceof Error ? error.message : String(error));
-    return localCompanionReply(profile.relation, content);
+    return localCompanionReply(profile, content);
   } finally {
     clearTimeout(timer);
   }
 }
 
 function buildCompanionPrompt(profile: AiCompanionRow, history: AiChatRow[], content: string) {
+  const avatarStyle = parseJsonObject(profile.avatar_style_json);
+  const kernel = parseJsonObject(profile.kernel_json);
   const historyLines = history
     .map((message) => `${message.sender === "user" ? "user" : "assistant"}:${base64Utf8(message.content)}`)
     .join("\n");
@@ -2127,6 +3074,8 @@ function buildCompanionPrompt(profile: AiCompanionRow, history: AiChatRow[], con
     `profile_relation_base64=${base64Utf8(profile.relation)}`,
     `profile_gender_base64=${base64Utf8(profile.gender)}`,
     `identity_style=${companionIdentityStyle(profile.relation)}`,
+    `avatar_style_summary_base64=${base64Utf8(summarizeAvatarStyle(avatarStyle))}`,
+    `kernel_summary_base64=${base64Utf8(summarizeCompanionKernel(kernel))}`,
     "conversation_history_base64_lines:",
     historyLines || "(empty)",
     `new_user_message_base64=${base64Utf8(content)}`,
@@ -2159,6 +3108,66 @@ function base64Utf8(value: string) {
   return btoa(binary);
 }
 
+function normalizeJsonString(value?: string | null) {
+  const parsed = parseJsonObject(value);
+  return JSON.stringify(parsed);
+}
+
+function parseJsonObject(value?: string | null) {
+  if (!value) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function summarizeAvatarStyle(style: Record<string, unknown>) {
+  const source = String(style.source || "").trim();
+  const parts = [
+    source ? `source:${source}` : "",
+    String(style.faceShape || "").trim() ? `face:${String(style.faceShape).trim()}` : "",
+    String(style.topType || "").trim() ? `top:${String(style.topType).trim()}` : "",
+    String(style.accessoriesType || "").trim() ? `accessories:${String(style.accessoriesType).trim()}` : "",
+    String(style.hatColor || "").trim() ? `hatColor:${String(style.hatColor).trim()}` : "",
+    String(style.hairColor || "").trim() ? `hairColor:${String(style.hairColor).trim()}` : "",
+    String(style.facialHairType || "").trim() ? `facialHair:${String(style.facialHairType).trim()}` : "",
+    String(style.facialHairColor || "").trim() ? `facialHairColor:${String(style.facialHairColor).trim()}` : "",
+    String(style.clotheType || "").trim() ? `clothes:${String(style.clotheType).trim()}` : "",
+    String(style.clotheColor || "").trim() ? `clothesColor:${String(style.clotheColor).trim()}` : "",
+    String(style.graphicType || "").trim() ? `graphic:${String(style.graphicType).trim()}` : "",
+    String(style.eyeType || "").trim() ? `eyes:${String(style.eyeType).trim()}` : "",
+    String(style.eyebrowType || "").trim() ? `eyebrow:${String(style.eyebrowType).trim()}` : "",
+    String(style.mouthType || "").trim() ? `mouth:${String(style.mouthType).trim()}` : "",
+    String(style.skinColor || "").trim() ? `skin:${String(style.skinColor).trim()}` : "",
+    String(style.skinTone || style.skin || "").trim(),
+    String(style.faceShape || style.face || "").trim(),
+    String(style.hairStyle || style.hair || "").trim(),
+    String(style.hairColor || style.hairColorName || "").trim(),
+    String(style.clothesStyle || style.outfit || "").trim(),
+    String(style.clothesColor || style.outfitColor || "").trim(),
+    String(style.hatStyle || style.hat || "").trim(),
+    String(style.headAccessoryStyle || style.headAccessory || "").trim(),
+    String(style.accessoryStyle || style.accessory || "").trim()
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "默认造型";
+}
+
+function summarizeCompanionKernel(kernel: Record<string, unknown>) {
+  const parts = [
+    String(kernel.tone || kernel.voiceTone || "").trim(),
+    String(kernel.memoryStyle || kernel.focus || "").trim(),
+    String(kernel.replyLength || kernel.length || "").trim(),
+    String(kernel.address || kernel.addressing || "").trim(),
+    String(kernel.boundary || kernel.boundaryNote || "").trim(),
+    String(kernel.opening || kernel.openingLine || "").trim()
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : "默认内核";
+}
+
 function chatCompletionsUrl(baseUrl: string) {
   const clean = baseUrl.replace(/\/+$/, "");
   if (clean.endsWith("/chat/completions")) {
@@ -2170,21 +3179,49 @@ function chatCompletionsUrl(baseUrl: string) {
   return `${clean}/v1/chat/completions`;
 }
 
-function localCompanionReply(relation: string, content: string) {
+function imageEditsUrl(baseUrl: string) {
+  const clean = baseUrl.replace(/\/+$/, "");
+  if (clean.endsWith("/images/edits")) {
+    return clean;
+  }
+  if (clean.endsWith("/v1")) {
+    return `${clean}/images/edits`;
+  }
+  return `${clean}/v1/images/edits`;
+}
+
+function imageGenerationsUrl(baseUrl: string) {
+  const clean = baseUrl.replace(/\/+$/, "");
+  if (clean.endsWith("/images/generations")) {
+    return clean;
+  }
+  if (clean.endsWith("/v1")) {
+    return `${clean}/images/generations`;
+  }
+  return `${clean}/v1/images/generations`;
+}
+
+function localCompanionReply(profile: AiCompanionRow, content: string) {
+  const relation = profile.relation;
+  const kernel = parseJsonObject(profile.kernel_json);
+  const tone = String(kernel.tone || kernel.voiceTone || "").trim();
+  const opening = String(kernel.opening || kernel.openingLine || "").trim();
+  const lengthHint = String(kernel.replyLength || kernel.length || "").trim();
   const trimmed = content.length > 40 ? `${content.slice(0, 40)}...` : content;
-  if (relation.includes("父") || relation.includes("爸")) {
-    return `我听见了。你说「${trimmed}」，先别急，我们一步一步来，我在这儿陪着你。`;
-  }
-  if (relation.includes("伴侣") || relation.includes("爱人")) {
-    return `我在你身边。你说的「${trimmed}」，我会认真听着，先陪你把心放稳一点。`;
-  }
-  if (relation.includes("朋友") || relation.includes("友")) {
-    return `我听到了。你说「${trimmed}」，不用一个人扛着，慢慢讲，我陪你。`;
-  }
-  if (relation.includes("宠物") || relation.includes("猫") || relation.includes("狗")) {
-    return `我像从前那样陪着你。你说「${trimmed}」，先轻轻抱抱这份想念。`;
-  }
-  return `我听见你说「${trimmed}」。别着急，我会温柔地陪你把这句话放好。`;
+  const prefix = opening || selectLocalReplyPrefix(relation, tone);
+  const reply = `${prefix}你说「${trimmed}」，我会稳稳接住这句话。`;
+  const maxLength = lengthHint === "详细" ? 120 : lengthHint === "简短" ? 70 : 90;
+  return reply.slice(0, maxLength);
+}
+
+function selectLocalReplyPrefix(relation: string, tone: string) {
+  if (tone.includes("稳")) return "我听见了，";
+  if (tone.includes("柔")) return "我在这儿，";
+  if (relation.includes("父") || relation.includes("爸")) return "我听见了，";
+  if (relation.includes("伴侣") || relation.includes("爱人")) return "我在你身边，";
+  if (relation.includes("朋友") || relation.includes("友")) return "我听到了，";
+  if (relation.includes("宠物") || relation.includes("猫") || relation.includes("狗")) return "我像从前那样陪着你，";
+  return "我在这里，";
 }
 
 function readBoolean(body: Record<string, unknown>, key: string, fallback: boolean) {
@@ -2295,7 +3332,7 @@ function adminPage() {
       <div class="top">
         <div>
           <h1>安忆管理后台</h1>
-          <div class="muted">社区、上传审核、审计、崩溃和注销请求统一管理</div>
+          <div class="muted">上传审核、审计、崩溃和注销请求统一管理</div>
         </div>
         <div class="row">
           <span id="adminName" class="muted"></span>
@@ -2304,7 +3341,6 @@ function adminPage() {
       </div>
       <div id="tabs" class="tabs hidden">
         <button class="tab active" data-tab="dashboard" onclick="showTab('dashboard')">概览</button>
-        <button class="tab" data-tab="community" onclick="showTab('community')">社区</button>
         <button class="tab" data-tab="uploads" onclick="showTab('uploads')">上传审核</button>
         <button class="tab" data-tab="deletions" onclick="showTab('deletions')">注销申请</button>
         <button class="tab" data-tab="crashes" onclick="showTab('crashes')">崩溃日志</button>
@@ -2328,13 +3364,11 @@ function adminPage() {
     <section id="appView" class="hidden">
       <section id="dashboard" class="tabPanel">
         <div class="grid">
-          <div class="card"><div class="muted">社区帖子</div><div id="mCommunity" class="metric">0</div></div>
           <div class="card"><div class="muted">待审核上传</div><div id="mUploads" class="metric">0</div></div>
           <div class="card"><div class="muted">崩溃日志</div><div id="mCrashes" class="metric">0</div></div>
           <div class="card"><div class="muted">注销申请</div><div id="mDeletes" class="metric">0</div></div>
         </div>
       </section>
-      <section id="community" class="tabPanel hidden"><div class="card"><h2>人文社区帖子</h2><div id="communityList" class="list"></div></div></section>
       <section id="uploads" class="tabPanel hidden"><div class="card"><h2>上传内容审核</h2><div class="row"><select id="uploadStatus" onchange="loadUploads()"><option value="pending">pending</option><option value="approved">approved</option><option value="rejected">rejected</option><option value="quarantined">quarantined</option></select></div><div id="uploadsList" class="list" style="margin-top:12px"></div></div></section>
       <section id="deletions" class="tabPanel hidden"><div class="card"><h2>账号注销申请</h2><div id="deletionsList" class="list"></div></div></section>
       <section id="crashes" class="tabPanel hidden"><div class="card"><h2>崩溃日志</h2><div id="crashesList" class="list"></div></div></section>
@@ -2345,7 +3379,7 @@ function adminPage() {
 <script>
 var token = localStorage.getItem('anyi_admin_token') || '';
 var currentUser = JSON.parse(localStorage.getItem('anyi_admin_user') || 'null');
-var cache = { community: [], uploads: [], crashes: [], deletions: [], audit: [], assetDeletes: [] };
+var cache = { uploads: [], crashes: [], deletions: [], audit: [], assetDeletes: [] };
 
 function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function authHeaders(extra){ var h = Object.assign({'Authorization':'Bearer ' + token}, extra || {}); return h; }
@@ -2381,23 +3415,14 @@ function boot(){
 function showTab(name){
   document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active', x.dataset.tab === name);});
   document.querySelectorAll('.tabPanel').forEach(function(x){x.classList.toggle('hidden', x.id !== name);});
-  if(name === 'community') loadCommunity();
   if(name === 'uploads') loadUploads();
   if(name === 'deletions') loadDeletions();
   if(name === 'crashes') loadCrashes();
   if(name === 'audit') loadAudit();
   if(name === 'assetDeletes') loadAssetDeletes();
 }
-async function refreshAll(){ await Promise.all([loadCommunity(), loadUploads(), loadCrashes(), loadDeletions(), loadAudit(), loadAssetDeletes()]).catch(function(e){console.warn(e);}); renderMetrics(); }
-function renderMetrics(){ mCommunity.textContent=cache.community.length; mUploads.textContent=cache.uploads.length; mCrashes.textContent=cache.crashes.length; mDeletes.textContent=cache.deletions.length; }
-
-async function loadCommunity(){ var d=await api('/community/posts'); cache.community=d.posts||[]; renderCommunity(); renderMetrics(); }
-function renderCommunity(){
-  communityList.innerHTML = cache.community.map(function(p){
-    var images = (p.imageUrls||[]).map(function(url){ return '<a href="'+esc(url)+'" target="_blank">图片</a>'; }).join(' · ');
-    return '<div class="card"><div><b>'+esc(p.displayName||p.username)+'</b> <span class="pill">社区</span></div><div class="muted">'+esc(p.username||'')+' · '+esc(p.createdAt||'')+'</div><p>'+esc(p.content)+'</p>'+(images?'<div class="muted">'+images+'</div>':'')+'</div>';
-  }).join('') || '<div class="muted">暂无社区帖子</div>';
-}
+async function refreshAll(){ await Promise.all([loadUploads(), loadCrashes(), loadDeletions(), loadAudit(), loadAssetDeletes()]).catch(function(e){console.warn(e);}); renderMetrics(); }
+function renderMetrics(){ mUploads.textContent=cache.uploads.length; mCrashes.textContent=cache.crashes.length; mDeletes.textContent=cache.deletions.length; }
 
 async function loadUploads(){ var d=await api('/admin/upload-reviews?status='+encodeURIComponent(uploadStatus.value)); cache.uploads=d.reviews||[]; renderUploads(); renderMetrics(); }
 function renderUploads(){ uploadsList.innerHTML = cache.uploads.map(function(r){return '<div class="card"><div><b>'+esc(r.mime_type)+'</b> <span class="pill">'+esc(r.status)+'</span></div><div class="muted">'+esc(r.asset_key)+' · '+esc(r.size_bytes)+' bytes</div><div class="row"><button class="good" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'approved\\')">通过</button><button class="danger" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'rejected\\')">拒绝</button><button class="secondary" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'quarantined\\')">隔离</button></div></div>';}).join('') || '<div class="muted">暂无记录</div>'; }

@@ -56,7 +56,6 @@ nano .env
 
 ```text
 AUTH_SECRET=replace-with-a-long-random-secret
-PAYMENT_WEBHOOK_SECRET=replace-with-payment-webhook-secret
 ADMIN_USERNAMES=admin
 ANYI_DATA_DIR=/var/lib/anyi-memorial-api
 PUBLIC_ASSET_BASE_URL=https://api.anyibj.cn
@@ -105,7 +104,7 @@ journalctl -u anyi-memorial-api -f
 
 ```bash
 sudo mkdir -p /var/www/anyi-downloads
-sudo cp /path/to/anyi-memorial-latest.apk /var/www/anyi-downloads/anyi-memorial-latest.apk
+sudo cp /opt/anyiapp2/AnyiMemorial-test-v1.0.7-code9-image-upload-fix-20260528-210844.apk /var/www/anyi-downloads/anyi-memorial-latest.apk
 sudo chown -R www-data:www-data /var/www/anyi-downloads
 ```
 

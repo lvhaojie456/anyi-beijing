@@ -73,6 +73,88 @@ class AnyiApiClient(
         return request(method = "DELETE", path = "/me", authorized = true)
     }
 
+    fun listCommunityPosts(): JSONArray {
+        return request(method = "GET", path = "/community/posts", authorized = true).getJSONArray("posts")
+    }
+
+    fun createCommunityPost(content: String, imageUrls: List<String> = emptyList()): JSONObject {
+        return request(
+            method = "POST",
+            path = "/community/posts",
+            authorized = true,
+            body = JSONObject()
+                .put("content", content)
+                .put("imageUrls", JSONArray(imageUrls))
+        )
+    }
+
+    fun likeCommunityPost(postId: String): JSONObject {
+        return request(method = "POST", path = "/community/posts/$postId/like", authorized = true)
+    }
+
+    fun listCommunityPostComments(postId: String): JSONArray {
+        return request(method = "GET", path = "/community/posts/$postId/comments", authorized = true)
+            .getJSONArray("comments")
+    }
+
+    fun createCommunityPostComment(postId: String, content: String): JSONObject {
+        return request(
+            method = "POST",
+            path = "/community/posts/$postId/comments",
+            authorized = true,
+            body = JSONObject().put("content", content)
+        )
+    }
+
+    fun communityVolunteerInfo(): JSONObject {
+        return request(method = "GET", path = "/community/volunteer", authorized = true)
+    }
+
+    fun createCommunityVolunteer(title: String, body: String, contact: String, imageUrl: String? = null): JSONObject {
+        val requestBody = JSONObject()
+            .put("title", title)
+            .put("body", body)
+            .put("contact", contact)
+        if (!imageUrl.isNullOrBlank()) {
+            requestBody.put("imageUrl", imageUrl)
+        }
+        return request(
+            method = "POST",
+            path = "/community/volunteer",
+            authorized = true,
+            body = requestBody
+        ).getJSONObject("volunteer")
+    }
+
+    fun applyForCommunityVolunteer(volunteerId: String, name: String, phone: String, note: String): JSONObject {
+        return request(
+            method = "POST",
+            path = "/community/volunteer/$volunteerId/applications",
+            authorized = true,
+            body = JSONObject()
+                .put("name", name)
+                .put("phone", phone)
+                .put("note", note)
+        ).getJSONObject("application")
+    }
+
+    fun listCommunityVolunteerApplications(status: String = "all"): JSONArray {
+        return request(
+            method = "GET",
+            path = "/community/volunteer/applications?status=$status",
+            authorized = true
+        ).getJSONArray("applications")
+    }
+
+    fun reviewCommunityVolunteerApplication(applicationId: String, status: String): JSONObject {
+        return request(
+            method = "PATCH",
+            path = "/community/volunteer/applications/$applicationId",
+            authorized = true,
+            body = JSONObject().put("status", status)
+        ).getJSONObject("application")
+    }
+
     fun reportCrash(
         platform: String,
         appVersion: String,
@@ -149,26 +231,6 @@ class AnyiApiClient(
         )
     }
 
-    fun listCommunityPosts(): JSONArray {
-        return request(method = "GET", path = "/community/posts", authorized = true)
-            .getJSONArray("posts")
-    }
-
-    fun createCommunityPost(content: String, imageUrls: List<String> = emptyList()): JSONObject {
-        return request(
-            method = "POST",
-            path = "/community/posts",
-            authorized = true,
-            body = JSONObject()
-                .put("content", content)
-                .put("imageUrls", JSONArray(imageUrls))
-        ).getJSONObject("post")
-    }
-
-    fun communityVolunteerInfo(): JSONObject {
-        return request(method = "GET", path = "/community/volunteer", authorized = true)
-    }
-
     fun uploadAsset(scope: String, fileName: String, mimeType: String, bytes: ByteArray): JSONObject {
         return multipartRequest(
             path = "/assets",
@@ -197,15 +259,28 @@ class AnyiApiClient(
         return request(method = "GET", path = "/ai/companions", authorized = true).getJSONArray("companions")
     }
 
-    fun createAiCompanion(displayName: String, gender: String, relation: String): JSONObject {
+    fun createAiCompanion(
+        displayName: String,
+        gender: String,
+        relation: String,
+        avatarStyleJson: String? = null,
+        kernelJson: String? = null
+    ): JSONObject {
+        val body = JSONObject()
+            .put("displayName", displayName)
+            .put("gender", gender)
+            .put("relation", relation)
+        if (!avatarStyleJson.isNullOrBlank()) {
+            body.put("avatarStyleJson", avatarStyleJson)
+        }
+        if (!kernelJson.isNullOrBlank()) {
+            body.put("kernelJson", kernelJson)
+        }
         return request(
             method = "POST",
             path = "/ai/companions",
             authorized = true,
-            body = JSONObject()
-                .put("displayName", displayName)
-                .put("gender", gender)
-                .put("relation", relation)
+            body = body
         ).getJSONObject("companion")
     }
 
@@ -214,7 +289,9 @@ class AnyiApiClient(
         displayName: String,
         gender: String,
         relation: String,
-        generated: Boolean? = null
+        generated: Boolean? = null,
+        avatarStyleJson: String? = null,
+        kernelJson: String? = null
     ): JSONObject {
         val body = JSONObject()
             .put("displayName", displayName)
@@ -222,6 +299,12 @@ class AnyiApiClient(
             .put("relation", relation)
         if (generated != null) {
             body.put("generated", generated)
+        }
+        if (!avatarStyleJson.isNullOrBlank()) {
+            body.put("avatarStyleJson", avatarStyleJson)
+        }
+        if (!kernelJson.isNullOrBlank()) {
+            body.put("kernelJson", kernelJson)
         }
         return request(method = "PATCH", path = "/ai/companions/$companionId", authorized = true, body = body)
             .getJSONObject("companion")
@@ -408,7 +491,7 @@ class AnyiApiClient(
             path == "/ai/messages" && method == "POST" -> 65_000
             path.startsWith("/ai/companions/") && path.endsWith("/messages") && method == "POST" -> 65_000
             path == "/assets" || path == "/ai/assets" || path.endsWith("/acceptance") -> 120_000
-            path.startsWith("/ai/companions/") && path.endsWith("/assets") -> 120_000
+            path.startsWith("/ai/companions/") && path.endsWith("/assets") -> 240_000
             else -> 30_000
         }
     }

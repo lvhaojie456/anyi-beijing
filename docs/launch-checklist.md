@@ -7,7 +7,7 @@
 - Android 后端地址：通过 `-PANYI_API_BASE_URL=...` 注入 `BuildConfig.API_BASE_URL`
 - 默认 API 地址：`https://api.anyibj.cn`
 - Release 签名入口：通过 `ANYI_RELEASE_*` 环境变量配置，不提交 keystore
-- 后端骨架：账号、管理员、纪念馆、人文社区、义工招募、AI 聊天、上传审核、文件上传
+- 后端骨架：账号、管理员、纪念馆、订单、聊天、验收图片、护符商城、支付回调、文件上传
 - 数据库迁移：`backend/migrations/*.sql`
 - 腾讯云部署文档：`backend/TENCENT_DEPLOY.md`
 - 隐私政策、用户协议、AI 免责声明模板
@@ -17,8 +17,9 @@
 - 开发者主体资料：个人或公司主体
 - 腾讯云 CVM、域名、备案资料和 HTTPS 证书
 - 国内上线所需的 APP 备案资料
+- 微信支付、支付宝或其他支付商户号
 - 隐私政策 URL、用户协议 URL、AI 免责声明 URL
-- 客服邮箱/电话、投诉入口、社区运营规则
+- 客服邮箱/电话、投诉入口、退款规则
 - App 图标、启动图、应用商店截图、应用简介
 - 普通用户测试账号、管理员测试账号
 
@@ -40,40 +41,42 @@
 - Play App Signing：<https://support.google.com/googleplay/android-developer/answer/9842756?hl=zh-cn>
 - Data safety：<https://support.google.com/googleplay/android-developer/answer/10787469?hl=zh-cn>
 
-## 人文社区流
+## 订单状态流
 
-社区动态：
+远程礼祭：
 
 ```text
-登录用户 -> 查看所有公开帖子 -> 发布动态 -> 全员可见
+pending_payment -> pending_order -> accepted -> in_progress -> pending_acceptance -> completed
 ```
 
 规则：
 
-- App 主入口展示人文社区帖子流，普通用户可看到所有用户发布的内容。
-- 发布内容进入 `community_posts`，图片字段已预留为 `imageUrls`。
-- 义工招募信息通过社区页小按钮打开。
-- 管理后台用于查看社区内容、上传审核、账号注销和审计日志。
+- `pending_payment -> pending_order`：由支付回调推进；管理员只用于线下对账补录。
+- `pending_order -> accepted -> in_progress`：管理员推进。
+- `in_progress -> pending_acceptance`：管理员上传验收图片后推进。
+- `pending_acceptance -> completed`：用户最终确认。
+- 用户和管理员可在订单内互发消息。
 
 ## 发布前测试
 
 - 注册、登录、退出、注销
 - 管理员账号是否正确进入 Web 后台
-- 普通用户发布社区动态
-- 不同账号能看到同一条社区动态
-- 社区页义工招募按钮能打开并展示联系方式
-- 管理员能在 Web 后台查看社区内容和审核上传素材
+- 普通用户创建远程礼祭订单并支付成功
+- 管理员查看所有订单、接单、推进、上传验收图片
+- 用户在验收图片后确认完成
+- 订单内用户和管理员互发消息
 - 纪念馆献花、点蜡烛、上香、供品限制
 - 图片/语音上传失败、权限拒绝、网络断开
 - 文件删除队列处理
-- 社区内容过长、空内容、敏感词和接口限流
+- 重复支付、回调延迟、金额不一致
 - 深色模式、不同屏幕尺寸、首次安装和升级安装
 - Release AAB 安装、崩溃日志、隐私弹窗、测试账号
 
 ## 上线前不可省略
 
 - 后端必须开启 HTTPS 和自有域名。
-- 隐私政策必须覆盖头像、纪念照片、语音、聊天、社区帖子和上传素材信息。
+- 支付签名校验必须接真实微信支付或支付宝官方流程。
+- 隐私政策必须覆盖头像、纪念照片、语音、聊天、订单、支付信息。
 - AI 陪伴如果未接真实 AI，商店描述必须明确“演示功能”或“暂未接入真实 AI”。
 - SQLite 数据库和上传目录必须配置定时备份。
 - 管理后台建议独立成后台域名，App 内仅保留入口。

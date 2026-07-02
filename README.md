@@ -1,54 +1,67 @@
-# 安忆北京
+# 安忆 Android
 
-安忆北京是一款围绕纪念、陪伴与社区互助而设计的应用。它希望把重要的人、重要的记忆和真实的互助需求安放在一个更温和、更有人情味的地方。
+安忆是一个 Android Compose 应用，包含云端纪念馆、AI 陪伴、远程礼祭、祈愿护符商城和 Web 管理后台。
 
-在这里，你可以建立云端纪念馆，记录想念与祝福；也可以进入人文社区，看到大家发布的动态、故事和互助信息；还可以查看义工招募，了解可以参与的公益与社区服务。
+当前项目已统一切到腾讯云部署路线：
 
-## 你可以用它做什么
+- Android 包名：`com.anyi.memorial`
+- App 默认连接：`https://api.anyibj.cn`
+- 后端：腾讯云 CVM 上运行 Node.js + Hono 服务
+- 数据库：服务器本机 SQLite，默认路径 `/var/lib/anyi-memorial-api/anyi.sqlite`
+- 上传文件：服务器本机目录，默认路径 `/var/lib/anyi-memorial-api/uploads`
+- Web 管理后台：`https://api.anyibj.cn/admin`
+- 官网：`website/` 静态文件，可部署到腾讯云 CVM Nginx 或腾讯云静态网站托管
 
-- **建立纪念馆**：为亲友、师长或重要的人创建纪念空间，保存照片、文字和回忆。
-- **表达思念**：通过献花、点蜡烛、上香、供品等方式，完成一次安静的纪念。
-- **浏览人文社区**：像朋友圈一样查看大家公开发布的内容，读到不同人的故事和近况。
-- **发布动态**：分享文字内容，让更多人看到你的记录、感受或求助信息。
-- **查看义工招募**：通过社区里的小入口了解义工信息，参与力所能及的帮助。
-- **使用 AI 陪伴**：在合适的边界内，用 AI 记录、整理和回应情绪与记忆。
+## Android 调试
 
-## 适合谁
+```powershell
+$env:JAVA_HOME='D:\0\android studio\jbr'
+.\gradlew.bat assembleDebug
+```
 
-- 想为重要的人保存一份长期纪念的人。
-- 希望把亲情、友情、人生故事认真记录下来的人。
-- 想在一个更安静的社区里阅读和分享真实生活的人。
-- 愿意参与义工、公益、社区互助的人。
-- 需要一个温柔入口来整理思念、告别和陪伴的人。
+Debug APK 输出：
 
-## 使用方式
+```text
+D:\Desktop\anyiapp2\app\build\outputs\apk\debug\app-debug.apk
+```
 
-1. 注册或登录账号。
-2. 进入人文社区，浏览大家公开发布的内容。
-3. 点击发布，写下自己的动态或故事。
-4. 进入纪念馆，创建纪念对象并上传资料。
-5. 通过社区里的义工入口查看招募信息。
-6. 根据需要使用 AI 陪伴与资料整理功能。
+## Android 发布配置
 
-## 隐私与安全
+发布前准备 release keystore，并通过环境变量传入签名信息：
 
-安忆北京会尽量减少不必要的数据收集，并把用户资料、纪念内容和社区内容分开管理。公开发布在社区里的内容会被其他用户看到；纪念馆、账号资料和上传素材则会按照产品规则进行保存与管理。
+```powershell
+$env:JAVA_HOME='D:\0\android studio\jbr'
+$env:ANYI_RELEASE_STORE_FILE='D:\secure\anyi-release.jks'
+$env:ANYI_RELEASE_STORE_PASSWORD='replace-with-password'
+$env:ANYI_RELEASE_KEY_ALIAS='anyi'
+$env:ANYI_RELEASE_KEY_PASSWORD='replace-with-password'
+.\gradlew.bat :app:bundleRelease -PANYI_API_BASE_URL=https://api.anyibj.cn
+```
 
-使用时请注意：
+Release AAB 通常输出到：
 
-- 不要在社区公开发布身份证号、住址、手机号、银行卡等敏感信息。
-- 上传他人照片、语音或资料前，请确认你有合理的使用权限。
-- AI 陪伴不能替代真实的人际沟通、心理咨询、医疗建议或法律建议。
-- 涉及紧急安全、医疗、法律或财务问题时，请优先联系专业机构或身边可信任的人。
+```text
+D:\Desktop\anyiapp2\app\build\outputs\bundle\release\app-release.aab
+```
 
-## 当前状态
+## 后端
 
-安忆北京仍在持续完善中。现阶段重点是打磨人文社区、纪念馆、义工招募与基础账号体验。部分功能、页面文案和运营规则会继续调整。
+```powershell
+cd D:\Desktop\anyiapp2\backend
+npm install
+npm run check
+npm run server:build
+```
 
-## 反馈
+腾讯云部署步骤见 [backend/TENCENT_DEPLOY.md](D:/Desktop/anyiapp2/backend/TENCENT_DEPLOY.md)。
 
-如果你在使用中遇到问题，或希望提出建议，可以通过项目页面提交反馈，也可以联系项目维护者。我们会优先关注影响注册登录、内容发布、纪念馆展示、隐私安全和数据保存的问题。
+## 上线材料
 
-## 开源说明
+- [上线清单](D:/Desktop/anyiapp2/docs/launch-checklist.md)
+- [安全与运营](D:/Desktop/anyiapp2/docs/security-operations.md)
+- [Web 管理后台说明](D:/Desktop/anyiapp2/docs/admin-web-backend.md)
+- [隐私政策模板](D:/Desktop/anyiapp2/docs/privacy-policy-template.md)
+- [用户协议模板](D:/Desktop/anyiapp2/docs/user-agreement-template.md)
+- [AI 陪伴免责声明模板](D:/Desktop/anyiapp2/docs/ai-disclaimer-template.md)
 
-本仓库用于公开展示安忆北京的产品实现与迭代记录。请不要提交真实密钥、账号密码、证书、数据库备份、个人隐私文件或未脱敏的用户数据。
+上线前仍需准备域名备案、HTTPS 证书、支付商户号、客服入口、隐私政策 URL、用户协议 URL、商店截图和测试账号。
