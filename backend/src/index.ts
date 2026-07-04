@@ -25,6 +25,8 @@ type Bindings = {
   LEGAL_CONTACT_EMAIL?: string;
   LEGAL_CONTACT_PHONE?: string;
   LEGAL_EFFECTIVE_DATE?: string;
+  VTUBER_URL?: string;
+  VTUBER_ENABLED?: string;
 };
 
 type AppPreparedStatement = {
@@ -346,6 +348,28 @@ app.get("/health", (c) =>
   })
 );
 
+app.get("/app/config", (c) =>
+  c.json({
+    digitalHuman: digitalHumanConfig(c)
+  })
+);
+
+app.get("/app/digital-human/status", async (c) => {
+  const config = digitalHumanConfig(c);
+  const page = await checkDigitalHumanPage(config.url, config.enabled);
+  return c.json({
+    ok: config.enabled && page.ok,
+    digitalHuman: {
+      enabled: config.enabled,
+      url: config.url
+    },
+    checks: {
+      page
+    },
+    checkedAt: new Date().toISOString()
+  });
+});
+
 app.post("/crash-reports", async (c) => {
   const user = await optionalAuthUser(c);
   const body = await parseJson(c);
@@ -612,6 +636,39 @@ app.post("/community/posts", requireAuth, async (c) => {
   return c.json({ post: serializeCommunityPost(post) }, 201);
 });
 
+app.delete("/community/posts/:id", requireAuth, async (c) => {
+  const user = c.get("user");
+  const post = await loadCommunityPostForUser(c, c.req.param("id"), user.id);
+  if (post.user_id !== user.id && user.role !== "admin") {
+    throw new ApiError(403, "community_post_delete_forbidden");
+  }
+
+  await c.env.DB.prepare("DELETE FROM community_post_comments WHERE post_id = ?")
+    .bind(post.id)
+    .run();
+  await c.env.DB.prepare("DELETE FROM community_post_likes WHERE post_id = ?")
+    .bind(post.id)
+    .run();
+  await c.env.DB.prepare("DELETE FROM community_posts WHERE id = ?")
+    .bind(post.id)
+    .run();
+
+  for (const url of parseStringArray(post.image_urls || "[]")) {
+    const key = assetKeyFromUrl(url);
+    if (key) {
+      await queueAssetDelete(c, key, post.user_id, "community_post_deleted");
+    }
+  }
+
+  await writeAudit(c, {
+    action: "community.post.delete",
+    targetType: "community_post",
+    targetId: post.id
+  });
+
+  return c.json({ deleted: true, postId: post.id });
+});
+
 app.get("/community/posts/:id/comments", requireAuth, async (c) => {
   const user = c.get("user");
   const post = await loadCommunityPostForUser(c, c.req.param("id"), user.id);
@@ -653,6 +710,32 @@ app.post("/community/posts/:id/comments", requireAuth, async (c) => {
   const comment = await loadCommunityComment(c, id);
   const updatedPost = await loadCommunityPostForUser(c, post.id, user.id);
   return c.json({ comment: serializeCommunityComment(comment), post: serializeCommunityPost(updatedPost) }, 201);
+});
+
+app.delete("/community/posts/:postId/comments/:commentId", requireAuth, async (c) => {
+  const user = c.get("user");
+  const post = await loadCommunityPostForUser(c, c.req.param("postId"), user.id);
+  const comment = await loadCommunityComment(c, c.req.param("commentId"));
+  if (comment.post_id !== post.id) {
+    throw new ApiError(404, "community_comment_not_found");
+  }
+  if (post.user_id !== user.id && user.role !== "admin") {
+    throw new ApiError(403, "community_comment_delete_forbidden");
+  }
+
+  await c.env.DB.prepare("DELETE FROM community_post_comments WHERE id = ?")
+    .bind(comment.id)
+    .run();
+
+  await writeAudit(c, {
+    action: "community.comment.delete",
+    targetType: "community_post_comment",
+    targetId: comment.id,
+    metadata: { postId: post.id }
+  });
+
+  const updatedPost = await loadCommunityPostForUser(c, post.id, user.id);
+  return c.json({ deleted: true, commentId: comment.id, post: serializeCommunityPost(updatedPost) });
 });
 
 app.post("/community/posts/:id/like", requireAuth, async (c) => {
@@ -1857,16 +1940,23 @@ app.get("/admin/crash-reports", requireAuth, async (c) => {
 
 app.get("/admin/asset-delete-queue", requireAuth, async (c) => {
   requireAdmin(c);
+  const keyColumn = await assetDeleteQueueKeyColumn(c);
   const rows = await c.env.DB.prepare(
     "SELECT * FROM asset_delete_queue ORDER BY created_at DESC LIMIT 200"
-  ).all();
-  return c.json({ items: rows.results });
+  ).all<Record<string, unknown>>();
+  return c.json({
+    items: rows.results.map((row) => ({
+      ...row,
+      asset_key: (row.asset_key || row[keyColumn]) as string | undefined
+    }))
+  });
 });
 
 app.post("/admin/asset-delete-queue/process", requireAuth, async (c) => {
   requireAdmin(c);
+  const keyColumn = await assetDeleteQueueKeyColumn(c);
   const rows = await c.env.DB.prepare(
-    "SELECT id, asset_key FROM asset_delete_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 50"
+    `SELECT id, ${keyColumn} AS asset_key FROM asset_delete_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 50`
   ).all<{ id: string; asset_key: string }>();
 
   let deleted = 0;
@@ -1948,6 +2038,90 @@ function isAllowedOrigin(c: Context<AppEnv>, origin: string) {
   return allowed.has(origin);
 }
 
+function digitalHumanConfig(c: Context<AppEnv>) {
+  const requestOrigin = publicRequestOrigin(c);
+  const configuredUrl = c.env.VTUBER_URL?.trim();
+  const url = configuredUrl && isPublicHttpUrl(configuredUrl)
+    ? ensureTrailingSlash(configuredUrl)
+    : `${requestOrigin}/vtuber/`;
+  return {
+    enabled: readEnvBoolean(c.env.VTUBER_ENABLED, true),
+    url,
+    statusUrl: `${requestOrigin}/app/digital-human/status`,
+    healthUrl: `${requestOrigin}/health`,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function checkDigitalHumanPage(url: string, enabled: boolean) {
+  const startedAt = Date.now();
+  if (!enabled) {
+    return {
+      ok: false,
+      status: null,
+      latencyMs: 0,
+      error: "digital_human_disabled"
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "text/html,application/xhtml+xml" },
+      signal: controller.signal
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      latencyMs: Date.now() - startedAt,
+      error: response.ok ? null : `http_${response.status}`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      latencyMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message.slice(0, 160) : "digital_human_check_failed"
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function publicRequestOrigin(c: Context<AppEnv>) {
+  const requestUrl = new URL(c.req.url);
+  const forwardedProto = c.req.header("x-forwarded-proto")?.split(",")[0]?.trim();
+  const forwardedHost = c.req.header("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || c.req.header("host") || requestUrl.host;
+  const protocol = forwardedProto || requestUrl.protocol.replace(/:$/g, "");
+  if (!host) {
+    return requestUrl.origin;
+  }
+  return `${protocol === "https" ? "https" : "http"}://${host}`;
+}
+
+function readEnvBoolean(value: string | undefined, fallback: boolean) {
+  if (value === undefined || value === null || value.trim() === "") {
+    return fallback;
+  }
+  return !["0", "false", "off", "no"].includes(value.trim().toLowerCase());
+}
+
+function isPublicHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function ensureTrailingSlash(value: string) {
+  return value.endsWith("/") ? value : `${value}/`;
+}
+
 function corsResponseHeaders(origin?: string) {
   const headers = new Headers();
   if (origin) {
@@ -1967,6 +2141,8 @@ function isRateLimitExempt(c: Context<AppEnv>) {
   const path = c.req.path;
   return (
     path === "/health" ||
+    path === "/app/config" ||
+    path === "/app/digital-human/status" ||
     path.startsWith("/assets/") ||
     (c.req.method === "GET" && path.startsWith("/legal/"))
   );
@@ -2105,11 +2281,17 @@ async function queueAssetDelete(
   ownerId: string | null,
   reason: string
 ) {
+  const keyColumn = await assetDeleteQueueKeyColumn(c);
   await c.env.DB.prepare(
-    "INSERT INTO asset_delete_queue (id, owner_id, asset_key, reason, created_at) VALUES (?, ?, ?, ?, ?)"
+    `INSERT INTO asset_delete_queue (id, owner_id, ${keyColumn}, reason, created_at) VALUES (?, ?, ?, ?, ?)`
   )
     .bind(crypto.randomUUID(), ownerId, assetKey, reason, new Date().toISOString())
     .run();
+}
+
+async function assetDeleteQueueKeyColumn(c: Context<AppEnv>) {
+  const rows = await c.env.DB.prepare("PRAGMA table_info(asset_delete_queue)").all<{ name: string }>();
+  return rows.results.some((row) => row.name === "asset_key") ? "asset_key" : "r2_key";
 }
 
 async function queueUserAssetsForDeletion(c: Context<AppEnv>, userId: string, reason: string) {
@@ -2546,6 +2728,18 @@ function assetUrl(c: Context<AppEnv>, key: string) {
   const inferredOrigin = forwardedHost ? `${forwardedProto}://${forwardedHost}` : new URL(c.req.url).origin;
   const base = (c.env.PUBLIC_ASSET_BASE_URL || inferredOrigin).replace(/\/+$/g, "");
   return `${base}/assets/${encodeURIComponent(key)}`;
+}
+
+function assetKeyFromUrl(value: string) {
+  const marker = "/assets/";
+  try {
+    const url = new URL(value);
+    const index = url.pathname.indexOf(marker);
+    return index >= 0 ? decodeURIComponent(url.pathname.slice(index + marker.length)) : null;
+  } catch {
+    const index = value.indexOf(marker);
+    return index >= 0 ? decodeURIComponent(value.slice(index + marker.length)) : null;
+  }
 }
 
 function safeScope(scope: string) {

@@ -1,6 +1,8 @@
 # 安忆 Android
 
-安忆是一个 Android Compose 应用，包含云端纪念馆、AI 陪伴、远程礼祭、祈愿护符商城和 Web 管理后台。
+安忆是一个 Android Compose 应用，已实现云端纪念馆、AI 陪伴、人文社区、素材上传审核、合规页面和 Web 管理后台；远程礼祭、祈愿护符商城和支付能力已预留数据模型与上线规划，尚未完成完整接口闭环。
+
+面试讲法见 [小红书产品工程师面试项目讲法](docs/xhs-product-engineer-interview.md)。
 
 当前项目已统一切到腾讯云部署路线：
 
@@ -10,6 +12,7 @@
 - 数据库：服务器本机 SQLite，默认路径 `/var/lib/anyi-memorial-api/anyi.sqlite`
 - 上传文件：服务器本机目录，默认路径 `/var/lib/anyi-memorial-api/uploads`
 - Web 管理后台：`https://api.anyibj.cn/admin`
+- 2D 数字人：默认由 `GET /app/config` 下发，当前指向 `https://api.anyibj.cn/vtuber/`；服务状态可查 `GET /app/digital-human/status`
 - 官网：`website/` 静态文件，可部署到腾讯云 CVM Nginx 或腾讯云静态网站托管
 
 ## Android 调试
@@ -59,6 +62,7 @@ npm run server:build
 
 - [上线清单](D:/Desktop/anyiapp2/docs/launch-checklist.md)
 - [安全与运营](D:/Desktop/anyiapp2/docs/security-operations.md)
+- [2D 数字人运维](D:/Desktop/anyiapp2/docs/digital-human-operations.md)
 - [Web 管理后台说明](D:/Desktop/anyiapp2/docs/admin-web-backend.md)
 - [隐私政策模板](D:/Desktop/anyiapp2/docs/privacy-policy-template.md)
 - [用户协议模板](D:/Desktop/anyiapp2/docs/user-agreement-template.md)

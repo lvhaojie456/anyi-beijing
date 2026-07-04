@@ -25,6 +25,14 @@ class AnyiApiClient(
         return request(method = "GET", path = "/health")
     }
 
+    fun appConfig(): JSONObject {
+        return request(method = "GET", path = "/app/config")
+    }
+
+    fun digitalHumanStatus(): JSONObject {
+        return request(method = "GET", path = "/app/digital-human/status")
+    }
+
     fun register(username: String, password: String, displayName: String): JSONObject {
         return request(
             method = "POST",
@@ -88,6 +96,10 @@ class AnyiApiClient(
         )
     }
 
+    fun deleteCommunityPost(postId: String): JSONObject {
+        return request(method = "DELETE", path = "/community/posts/$postId", authorized = true)
+    }
+
     fun likeCommunityPost(postId: String): JSONObject {
         return request(method = "POST", path = "/community/posts/$postId/like", authorized = true)
     }
@@ -104,6 +116,10 @@ class AnyiApiClient(
             authorized = true,
             body = JSONObject().put("content", content)
         )
+    }
+
+    fun deleteCommunityPostComment(postId: String, commentId: String): JSONObject {
+        return request(method = "DELETE", path = "/community/posts/$postId/comments/$commentId", authorized = true)
     }
 
     fun communityVolunteerInfo(): JSONObject {

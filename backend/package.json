@@ -7,6 +7,7 @@
     "server:start": "node dist-node/server/server.js",
     "server:restart": "npm run server:build && npm run server:start",
     "asset:delete:process": "powershell -ExecutionPolicy Bypass -File scripts/process-asset-delete-queue.ps1",
+    "digital-human:smoke": "node scripts/digital-human-smoke.mjs",
     "check": "tsc --noEmit"
   },
   "dependencies": {

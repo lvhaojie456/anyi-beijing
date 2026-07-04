@@ -35,6 +35,8 @@
 - `GET /admin/asset-delete-queue`、`POST /admin/asset-delete-queue/process`：本地文件删除队列
 - `GET /admin/crash-reports`：崩溃日志
 - `GET /admin/account-deletion-requests`、`PATCH /admin/account-deletion-requests/:id`：账号注销申请
+- `GET /app/config`：App 运行配置，下发 2D 数字人入口地址和开关
+- `GET /app/digital-human/status`：检查 2D 数字人页面是否可用
 
 ## 本地开发
 
@@ -54,6 +56,8 @@ ADMIN_USERNAMES=admin
 ANYI_DATA_DIR=D:\Desktop\anyiapp2\backend\data
 PUBLIC_ASSET_BASE_URL=http://127.0.0.1:8787
 ALLOWED_ORIGINS=http://127.0.0.1:8787,http://localhost:8787,https://api.anyibj.cn
+VTUBER_URL=https://api.anyibj.cn/vtuber/
+VTUBER_ENABLED=true
 ```
 
 ## 腾讯云部署
@@ -75,6 +79,7 @@ cd /opt/anyiapp2/backend
 npm install
 npm run server:build
 npm run server:start
+npm run digital-human:smoke -- https://api.anyibj.cn
 ```
 
 systemd 服务文件在 [examples/anyi-memorial-api.service](D:/Desktop/anyiapp2/backend/examples/anyi-memorial-api.service)。

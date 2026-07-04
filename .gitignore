@@ -1,4 +1,5 @@
 # Local IDE and machine state
+.DS_Store
 *.iml
 .idea/
 .gradle/

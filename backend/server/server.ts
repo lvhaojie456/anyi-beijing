@@ -53,7 +53,9 @@ const env = {
   LEGAL_OPERATOR_NAME: process.env.LEGAL_OPERATOR_NAME || "安忆",
   LEGAL_CONTACT_EMAIL: process.env.LEGAL_CONTACT_EMAIL || "544908186@qq.com",
   LEGAL_CONTACT_PHONE: process.env.LEGAL_CONTACT_PHONE || "+8619310425540",
-  LEGAL_EFFECTIVE_DATE: process.env.LEGAL_EFFECTIVE_DATE || "2026-05-09"
+  LEGAL_EFFECTIVE_DATE: process.env.LEGAL_EFFECTIVE_DATE || "2026-05-09",
+  VTUBER_URL: process.env.VTUBER_URL || "",
+  VTUBER_ENABLED: process.env.VTUBER_ENABLED || "true"
 };
 
 const server = serve(
