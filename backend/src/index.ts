@@ -57,7 +57,13 @@ type AssetBucket = {
       customMetadata?: Record<string, string>;
     }
   ): Promise<unknown>;
-  get(key: string): Promise<{
+  get(
+    key: string,
+    options?: {
+      maxDimension?: number;
+      format?: "webp";
+    }
+  ): Promise<{
     body: BodyInit;
     httpMetadata?: { contentType?: string };
   } | null>;
@@ -1631,7 +1637,11 @@ app.get("/assets/*", requireAuth, async (c) => {
     throw new ApiError(404, "asset_not_found");
   }
 
-  const object = await c.env.ASSETS.get(key);
+  const maxDimension = readAssetImageDimension(c.req.query("max"));
+  const object = await c.env.ASSETS.get(
+    key,
+    maxDimension ? { maxDimension, format: "webp" } : undefined
+  );
   if (!object) {
     throw new ApiError(404, "asset_not_found");
   }
@@ -1640,6 +1650,7 @@ app.get("/assets/*", requireAuth, async (c) => {
     headers: {
       "Content-Type": object.httpMetadata?.contentType || "application/octet-stream",
       "Cache-Control": publicAccess ? "public, max-age=31536000, immutable" : "private, no-store",
+      ...(maxDimension ? { "X-Anyi-Image-Variant": String(maxDimension) } : {}),
       "X-Content-Type-Options": "nosniff"
     }
   });
@@ -2963,8 +2974,11 @@ function rateLimitPolicy(c: Context<AppEnv>) {
   if (path === "/crash-reports") {
     return { routeKey: "crash", scope: "ip", limit: 20, windowMs: 60_000 };
   }
-  if (path.includes("/assets")) {
+  if (c.req.method === "POST" && path === "/assets") {
     return { routeKey: "upload", scope: "ip", limit: 20, windowMs: 60_000 };
+  }
+  if (c.req.method === "GET" && path.startsWith("/assets/")) {
+    return { routeKey: "asset-read", scope: "ip", limit: 600, windowMs: 60_000 };
   }
   if (c.req.method === "GET") {
     return { routeKey: "read", scope: "ip", limit: 300, windowMs: 60_000 };
@@ -2987,6 +3001,14 @@ async function optionalAuthUser(c: Context<AppEnv>) {
     return undefined;
   }
   return verifyToken(c.env, token).catch(() => undefined);
+}
+
+function readAssetImageDimension(value?: string) {
+  if (!value) return null;
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return null;
+  const allowed = [128, 256, 512, 768, 1024, 1600];
+  return allowed.find((size) => size >= requested) || allowed[allowed.length - 1];
 }
 
 async function assertUserCanUseAccount(c: Context<AppEnv>, user: AuthUser) {

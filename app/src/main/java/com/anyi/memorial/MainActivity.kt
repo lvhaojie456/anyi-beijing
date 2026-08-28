@@ -7,6 +7,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,6 +21,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.util.LruCache
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -223,6 +225,13 @@ private const val OFFERING_DURATION_MS = 10L * 60L * 1000L
 private const val CLOUD_CACHE_DIR = "anyi_cloud_resources"
 private const val CLOUD_CACHE_MAX_BYTES = 160L * 1024L * 1024L
 private const val CLOUD_CACHE_TARGET_BYTES = 120L * 1024L * 1024L
+private const val URI_IMAGE_MEMORY_CACHE_KB = 24 * 1024
+
+private val uriImageMemoryCache = object : LruCache<String, Bitmap>(URI_IMAGE_MEMORY_CACHE_KB) {
+    override fun sizeOf(key: String, value: Bitmap): Int {
+        return (value.allocationByteCount / 1024).coerceAtLeast(1)
+    }
+}
 
 data class AppUser(
     val id: String,
@@ -2104,7 +2113,7 @@ private fun ProfileSettingsScreen(
     var avatarUrl by rememberSaveable(user.id) { mutableStateOf(user.avatarUrl.orEmpty()) }
     var message by rememberSaveable(user.id) { mutableStateOf("") }
     var loading by rememberSaveable(user.id) { mutableStateOf(false) }
-    val avatar by rememberUriImage(avatarUrl)
+    val avatar by rememberUriImage(avatarUrl, maxDimensionPx = 512)
 
     fun saveProfile(nextAvatarUrl: String?) {
         val nextName = displayName.trim().ifBlank { user.username }
@@ -2354,7 +2363,7 @@ private fun MemorialHallScreen(user: AppUser) {
     var cloudMessage by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    val portrait by rememberUriImage(portraitUri)
+    val portrait by rememberUriImage(portraitUri, maxDimensionPx = 768)
 
     fun applyMemorial(json: JSONObject) {
         memorialId = json.optString("id").takeIf { it.isNotBlank() }
@@ -5889,7 +5898,7 @@ private fun CommunityVolunteerAdminPanel(
 
 @Composable
 private fun CommunityVolunteerCoverImage(imageUrl: String?, title: String) {
-    val bitmap by rememberUriImage(imageUrl)
+    val bitmap by rememberUriImage(imageUrl, maxDimensionPx = 1024)
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -6775,7 +6784,7 @@ private fun CommunityImageTileContent(
     removable: Boolean,
     onRemove: () -> Unit
 ) {
-    val bitmap by rememberUriImage(imageUrl)
+    val bitmap by rememberUriImage(imageUrl, maxDimensionPx = 768)
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -6833,7 +6842,7 @@ private fun CommunityAvatar(
             .border(1.dp, Line.copy(alpha = 0.5f), avatarShape),
         contentAlignment = Alignment.Center
     ) {
-        val avatarState = rememberUriImage(avatarUrl)
+        val avatarState = rememberUriImage(avatarUrl, maxDimensionPx = 256)
         val avatar = avatarState.value
         if (avatar != null) {
             ComposeImage(
@@ -6908,54 +6917,101 @@ private fun SectionTitle(title: String, subtitle: String, modifier: Modifier = M
 }
 
 @Composable
-private fun rememberUriImage(uriString: String?) = LocalContext.current.let { context ->
-    produceState<ImageBitmap?>(initialValue = null, uriString) {
+private fun rememberUriImage(uriString: String?, maxDimensionPx: Int = 1024) = LocalContext.current.let { context ->
+    produceState<ImageBitmap?>(initialValue = null, uriString, maxDimensionPx) {
         value = null
         if (uriString.isNullOrBlank()) return@produceState
         value = withContext(Dispatchers.IO) {
             runCatching {
                 val normalized = absoluteAssetUrl(uriString)
-                if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
-                    if (!BuildConfig.DEBUG && normalized.startsWith("http://")) {
-                        return@runCatching null
-                    }
-                    val isAsset = Uri.parse(normalized).path.orEmpty().startsWith("/assets/")
-                    if (isAsset) {
-                        val connection = (URL(normalized).openConnection() as? HttpURLConnection)
-                            ?: return@runCatching null
-                        try {
-                            connection.connectTimeout = 12_000
-                            connection.readTimeout = 20_000
-                            connection.requestMethod = "GET"
-                            context.appPrefs().getString(KEY_AUTH_TOKEN, null)
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
-                            connection.connect()
-                            if (connection.responseCode !in 200..299) {
-                                null
+                val assetPath = isAuthenticatedAssetResource(normalized)
+                val requestUrl = if (assetPath) normalized.imageVariantUrl(maxDimensionPx) else normalized
+                val prefs = context.appPrefs()
+                val userId = prefs.getString(KEY_USER_ID, null).orEmpty()
+                val cacheIdentity = if (assetPath) "$userId|$requestUrl" else requestUrl
+                val memoryKey = "$cacheIdentity|decode=$maxDimensionPx"
+                uriImageMemoryCache.get(memoryKey)?.let { return@runCatching it.asImageBitmap() }
+
+                val bitmap = when {
+                    requestUrl.startsWith("http://") || requestUrl.startsWith("https://") -> {
+                        if (!BuildConfig.DEBUG && requestUrl.startsWith("http://")) {
+                            null
+                        } else {
+                            val token = prefs.getString(KEY_AUTH_TOKEN, null)
+                                ?.takeIf { assetPath && it.isNotBlank() }
+                            val cached = context.loadCachedCloudResource(
+                                url = requestUrl,
+                                authorizationToken = token,
+                                cacheIdentity = cacheIdentity
+                            )
+                            if (cached != null) {
+                                decodeSampledBitmap(cached, maxDimensionPx)
                             } else {
-                                connection.inputStream.use { input ->
-                                    BitmapFactory.decodeStream(input)?.asImageBitmap()
+                                val connection = (URL(requestUrl).openConnection() as? HttpURLConnection)
+                                    ?: return@runCatching null
+                                try {
+                                    connection.connectTimeout = 12_000
+                                    connection.readTimeout = 20_000
+                                    connection.requestMethod = "GET"
+                                    token?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
+                                    connection.connect()
+                                    if (connection.responseCode !in 200..299) {
+                                        null
+                                    } else {
+                                        connection.inputStream.use { input -> BitmapFactory.decodeStream(input) }
+                                    }
+                                } finally {
+                                    connection.disconnect()
                                 }
                             }
-                        } finally {
-                            connection.disconnect()
-                        }
-                    } else {
-                        val cached = context.loadCachedCloudResource(normalized)
-                        val input = if (cached != null) FileInputStream(cached) else URL(normalized).openStream()
-                        input.use {
-                            BitmapFactory.decodeStream(input)?.asImageBitmap()
                         }
                     }
-                } else {
-                    context.contentResolver.openInputStream(Uri.parse(normalized)).use { input ->
-                        if (input == null) null else BitmapFactory.decodeStream(input)?.asImageBitmap()
-                    }
+                    else -> context.decodeSampledBitmap(Uri.parse(normalized), maxDimensionPx)
                 }
+
+                bitmap?.also { uriImageMemoryCache.put(memoryKey, it) }?.asImageBitmap()
             }.getOrNull()
         }
     }
+}
+
+private fun String.imageVariantUrl(maxDimensionPx: Int): String {
+    return Uri.parse(this).buildUpon()
+        .appendQueryParameter("max", maxDimensionPx.toString())
+        .appendQueryParameter("format", "webp")
+        .build()
+        .toString()
+}
+
+private fun Context.decodeSampledBitmap(uri: Uri, maxDimensionPx: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = bitmapSampleSize(bounds.outWidth, bounds.outHeight, maxDimensionPx)
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+}
+
+private fun decodeSampledBitmap(file: File, maxDimensionPx: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = bitmapSampleSize(bounds.outWidth, bounds.outHeight, maxDimensionPx)
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    return BitmapFactory.decodeFile(file.absolutePath, options)
+}
+
+private fun bitmapSampleSize(width: Int, height: Int, maxDimensionPx: Int): Int {
+    val target = maxDimensionPx.coerceAtLeast(128)
+    var sampleSize = 1
+    while (maxOf(width, height) / (sampleSize * 2) >= target) {
+        sampleSize *= 2
+    }
+    return sampleSize
 }
 
 private fun Context.openCachedCloudResourceResponse(url: String): WebResourceResponse? {
@@ -6974,10 +7030,14 @@ private fun Context.openCachedCloudResourceResponse(url: String): WebResourceRes
     }
 }
 
-private fun Context.loadCachedCloudResource(url: String): File? {
-    if (!isCacheableCloudResource(url)) return null
+private fun Context.loadCachedCloudResource(
+    url: String,
+    authorizationToken: String? = null,
+    cacheIdentity: String = url
+): File? {
+    if (!isCacheableCloudResource(url) && !isAuthenticatedAssetResource(url)) return null
     val cacheDir = File(this.cacheDir, CLOUD_CACHE_DIR).apply { mkdirs() }
-    val cacheFile = File(cacheDir, cloudCacheFileName(url))
+    val cacheFile = File(cacheDir, cloudCacheFileName(url, cacheIdentity))
     if (cacheFile.isFile && cacheFile.length() > 0L) {
         cacheFile.setLastModified(System.currentTimeMillis())
         return cacheFile
@@ -6993,6 +7053,8 @@ private fun Context.loadCachedCloudResource(url: String): File? {
         connection.readTimeout = 20_000
         connection.requestMethod = "GET"
         connection.setRequestProperty("Accept-Encoding", "identity")
+        authorizationToken?.takeIf { it.isNotBlank() }
+            ?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
         connection.connect()
         if (connection.responseCode !in 200..299) {
             null
@@ -7069,9 +7131,9 @@ private fun isCacheableCloudResource(url: String): Boolean {
     ).any { path.endsWith(it) }
 }
 
-private fun cloudCacheFileName(url: String): String {
+private fun cloudCacheFileName(url: String, cacheIdentity: String = url): String {
     val digest = MessageDigest.getInstance("SHA-256")
-        .digest(url.toByteArray(Charsets.UTF_8))
+        .digest(cacheIdentity.toByteArray(Charsets.UTF_8))
         .joinToString("") { byte -> "%02x".format(byte) }
     val path = Uri.parse(url).path.orEmpty()
     val extension = path.substringAfterLast('/', "")
@@ -7550,6 +7612,15 @@ private fun absoluteAssetUrl(value: String): String {
         value.startsWith("http://api.anyibj.cn/") -> value.replace("http://api.anyibj.cn", apiBase)
         else -> value
     }
+}
+
+private fun isAuthenticatedAssetResource(url: String): Boolean {
+    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+    val scheme = uri.scheme?.lowercase(Locale.US)
+    if (scheme != "https" && scheme != "http") return false
+    val apiHost = runCatching { Uri.parse(BuildConfig.API_BASE_URL).host }.getOrNull()
+    if (uri.host != apiHost && uri.host != "api.anyibj.cn") return false
+    return uri.encodedPath.orEmpty().startsWith("/assets/") || uri.path.orEmpty().startsWith("/assets/")
 }
 
 private fun parseTimeMillis(raw: String): Long {
