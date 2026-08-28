@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "安忆"
+    },
+    {
+      "name": "module_desc",
+      "value": "安忆 HarmonyOS 原生客户端"
+    },
+    {
+      "name": "entry_ability_desc",
+      "value": "安忆主窗口"
+    },
+    {
+      "name": "microphone_reason",
+      "value": "用于数字人页面中的语音输入和陪伴对话"
+    }
+  ]
+}

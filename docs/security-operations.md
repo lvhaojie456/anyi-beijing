@@ -2,7 +2,7 @@
 
 ## 已实现
 
-- 接口限流：Node 服务使用 SQLite 的 `rate_limits` 表按 IP 和接口类别限流。
+- 接口限流：Node 服务使用数据库里的 `rate_limits` 表按 IP 和接口类别限流。
 - CORS 限制：浏览器请求只允许 `ALLOWED_ORIGINS` 中的域名；Android App 不受浏览器 CORS 影响。
 - 日志审计：管理员订单操作、验收上传、上传审核、文件删除队列处理会写入 `audit_logs`。
 - 管理员操作记录：`GET /admin/audit-logs` 可查看最近 200 条。
@@ -16,17 +16,18 @@
 生产数据在腾讯云服务器：
 
 ```text
-/var/lib/anyi-memorial-api/anyi.sqlite
+MySQL: 127.0.0.1:3306/anyi_memorial
 /var/lib/anyi-memorial-api/uploads
 ```
 
-建议每天备份：
+服务器使用 `anyi-mysql-backup.timer` 每天自动备份 MySQL dump 和 uploads：
 
 ```bash
-sudo tar -czf /opt/anyi-backup-$(date +%F).tar.gz /var/lib/anyi-memorial-api
+sudo systemctl list-timers anyi-mysql-backup.timer --no-pager
+sudo systemctl start anyi-mysql-backup.service
 ```
 
-备份文件建议同步到腾讯云 COS 或另一台服务器。备份目录不要提交到代码仓库。
+备份目录默认是 `/home/ubuntu/anyi-db-backups`，保留 14 天。备份文件建议同步到腾讯云 COS 或另一台服务器。备份目录不要提交到代码仓库。
 
 ## 处理文件删除队列
 

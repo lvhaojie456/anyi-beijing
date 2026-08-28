@@ -16,6 +16,7 @@ import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -28,11 +29,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -40,7 +36,6 @@ import androidx.compose.foundation.Image as ComposeImage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -89,6 +84,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Face
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Forest
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Image
@@ -104,13 +100,11 @@ import androidx.compose.material.icons.rounded.Redeem
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Whatshot
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -126,7 +120,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -175,15 +168,20 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.net.HttpURLConnection
 import java.text.SimpleDateFormat
+import java.security.MessageDigest
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
 import java.net.URL
+import java.net.URLConnection
 
 private val Background = Color(0xFFF5F5F7)
 private val Ink = Color(0xFF1D1D1F)
@@ -207,6 +205,11 @@ private val WechatDivider = Color(0xFFEDEDED)
 private val WechatBlue = Color(0xFF576B95)
 private val WechatComment = Color(0xFFF3F3F3)
 
+private val AppCardShape = RoundedCornerShape(16.dp)
+private val AppButtonShape = RoundedCornerShape(12.dp)
+private val AppInputShape = RoundedCornerShape(12.dp)
+private val AppTagShape = RoundedCornerShape(999.dp)
+
 private const val PREFS_NAME = "anyi_memorial_app"
 private const val KEY_USER_ID = "session_user_id"
 private const val KEY_USER_NAME = "session_username"
@@ -214,9 +217,11 @@ private const val KEY_DISPLAY_NAME = "session_display_name"
 private const val KEY_USER_ROLE = "session_role"
 private const val KEY_USER_AVATAR = "session_avatar_url"
 private const val KEY_AUTH_TOKEN = "session_token"
-private const val KEY_AI_CHAT = "ai_chat_messages"
 private const val DURIAN_OFFERING_FEATURE = "offering_durian"
 private const val OFFERING_DURATION_MS = 10L * 60L * 1000L
+private const val CLOUD_CACHE_DIR = "anyi_cloud_resources"
+private const val CLOUD_CACHE_MAX_BYTES = 160L * 1024L * 1024L
+private const val CLOUD_CACHE_TARGET_BYTES = 120L * 1024L * 1024L
 
 data class AppUser(
     val id: String,
@@ -255,7 +260,8 @@ data class CommunityPost(
     val likeCount: Int,
     val commentCount: Int,
     val likedByMe: Boolean,
-    val createdAt: Long
+    val createdAt: Long,
+    val moderationStatus: String = "approved"
 )
 
 data class CommunityComment(
@@ -266,7 +272,8 @@ data class CommunityComment(
     val authorUsername: String,
     val authorAvatarUrl: String?,
     val content: String,
-    val createdAt: Long
+    val createdAt: Long,
+    val moderationStatus: String = "approved"
 )
 
 data class CommunityVolunteerPost(
@@ -298,45 +305,6 @@ private data class CommunityRefreshResult(
     val commentsByPost: Map<String, List<CommunityComment>>,
     val volunteers: List<CommunityVolunteerPost>,
     val applications: List<CommunityVolunteerApplication>
-)
-
-data class ChatMessage(
-    val id: String,
-    val sender: String,
-    val content: String,
-    val createdAt: Long
-)
-
-data class AvatarMotionBox(
-    val x: Float,
-    val y: Float,
-    val w: Float,
-    val h: Float
-)
-
-data class AvatarMotion(
-    val status: String,
-    val source: String,
-    val confidence: Float,
-    val face: AvatarMotionBox,
-    val mouth: AvatarMotionBox
-)
-
-data class AiCompanion(
-    val id: String,
-    val displayName: String,
-    val gender: String,
-    val relation: String,
-    val avatarUrl: String?,
-    val smileAvatarUrl: String?,
-    val avatarMotion: AvatarMotion?,
-    val paidUnlocked: Boolean,
-    val photoCount: Int,
-    val voiceCount: Int,
-    val momentCount: Int,
-    val generated: Boolean,
-    val isDefault: Boolean,
-    val updatedAt: Long
 )
 
 enum class ScreenTab(
@@ -435,12 +403,20 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
     var message by rememberSaveable { mutableStateOf("") }
     var serverMessage by rememberSaveable { mutableStateOf("正在检查云端服务...") }
     var loading by rememberSaveable { mutableStateOf(false) }
+    var acceptedLegal by rememberSaveable { mutableStateOf(false) }
+    var wechatEnabled by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        val result = runCatching {
+        val healthResult = runCatching {
             withContext(Dispatchers.IO) { api.health() }
         }
-        serverMessage = result.fold(
+        val configResult = runCatching {
+            withContext(Dispatchers.IO) { api.appConfig() }
+        }
+        wechatEnabled = configResult.getOrNull()
+            ?.optJSONObject("wechat")
+            ?.optBoolean("enabled", false) == true && WechatAuthBridge.isConfigured()
+        serverMessage = healthResult.fold(
             onSuccess = { "云端服务正常，可以登录或注册" },
             onFailure = { it.userFriendlyMessage("云端服务暂时不可用") }
         )
@@ -478,7 +454,7 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                 Box(
                     modifier = Modifier
                         .size(76.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(22.dp))
                         .background(Brush.linearGradient(listOf(Night, Green, Amber.copy(alpha = 0.9f)))),
                     contentAlignment = Alignment.Center
                 ) {
@@ -498,7 +474,7 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Leaf.copy(alpha = 0.72f), RoundedCornerShape(8.dp))
+                            .background(Leaf.copy(alpha = 0.72f), RoundedCornerShape(12.dp))
                             .padding(4.dp)
                     ) {
                         AuthModeButton("登录", !isRegister) {
@@ -512,58 +488,70 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                     }
                     Spacer(Modifier.height(18.dp))
 
-                    Button(
-                        onClick = {
-                            val currentActivity = activity
-                            if (currentActivity == null) {
-                                message = "当前页面暂时不能唤起微信登录"
-                                return@Button
-                            }
-                            loading = true
-                            WechatAuthBridge.startLogin(currentActivity) { result ->
-                                when (result) {
-                                    is WechatAuthResult.Success -> {
-                                        scope.launch {
-                                            val signedIn = runCatching {
-                                                withContext(Dispatchers.IO) {
-                                                    parseSignedInUser(api.loginWithWechat(result.code))
+                    if (wechatEnabled) {
+                        Button(
+                            onClick = {
+                                if (!acceptedLegal) {
+                                    message = "请先阅读并同意用户协议和隐私政策"
+                                    return@Button
+                                }
+                                val currentActivity = activity
+                                if (currentActivity == null) {
+                                    message = "当前页面暂时不能唤起微信登录"
+                                    return@Button
+                                }
+                                loading = true
+                                WechatAuthBridge.startLogin(currentActivity) { result ->
+                                    when (result) {
+                                        is WechatAuthResult.Success -> {
+                                            scope.launch {
+                                                val signedIn = runCatching {
+                                                    withContext(Dispatchers.IO) {
+                                                        parseSignedInUser(
+                                                            api.loginWithWechat(
+                                                                result.code,
+                                                                acceptedTerms = true,
+                                                                acceptedPrivacy = true
+                                                            )
+                                                        )
+                                                    }
                                                 }
+                                                loading = false
+                                                signedIn
+                                                    .onSuccess { onSignedIn(it) }
+                                                    .onFailure { message = it.userFriendlyMessage("微信登录失败，请稍后再试") }
                                             }
+                                        }
+                                        is WechatAuthResult.Failure -> {
                                             loading = false
-                                            signedIn
-                                                .onSuccess { onSignedIn(it) }
-                                                .onFailure { message = it.userFriendlyMessage("微信登录失败，请稍后再试") }
+                                            message = result.message
                                         }
                                     }
-                                    is WechatAuthResult.Failure -> {
-                                        loading = false
-                                        message = result.message
-                                    }
                                 }
-                            }
-                        },
-                        enabled = !loading,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF1AAD19),
-                            contentColor = Color.White,
-                            disabledContainerColor = Line.copy(alpha = 0.72f),
-                            disabledContentColor = Muted
-                        ),
-                        contentPadding = PaddingValues(vertical = 14.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.ChatBubble,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (loading) "正在连接微信..." else "微信一键登录", fontWeight = FontWeight.Bold)
-                    }
+                            },
+                            enabled = !loading,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = AppButtonShape,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF1AAD19),
+                                contentColor = Color.White,
+                                disabledContainerColor = Line.copy(alpha = 0.72f),
+                                disabledContentColor = Muted
+                            ),
+                            contentPadding = PaddingValues(vertical = 14.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ChatBubble,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (loading) "正在连接微信..." else "微信一键登录", fontWeight = FontWeight.Bold)
+                        }
 
-                    Spacer(Modifier.height(14.dp))
-                    Text("或使用账号密码登录", color = Muted, fontSize = 12.sp)
+                        Spacer(Modifier.height(14.dp))
+                    }
+                    Text("使用账号密码登录", color = Muted, fontSize = 12.sp)
                     Spacer(Modifier.height(12.dp))
 
                     OutlinedTextField(
@@ -571,7 +559,7 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                         onValueChange = { username = it.trim() },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = AppInputShape,
                         label = { Text("账号") },
                         leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null) },
                         colors = warmTextFieldColors()
@@ -582,7 +570,7 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                         onValueChange = { password = it },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = AppInputShape,
                         label = { Text("密码") },
                         leadingIcon = { Icon(Icons.Rounded.Lock, contentDescription = null) },
                         visualTransformation = PasswordVisualTransformation(),
@@ -590,13 +578,19 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                         colors = warmTextFieldColors()
                     )
 
-                    if (isRegister) {
+                    if (isRegister || wechatEnabled) {
                         Spacer(Modifier.height(12.dp))
-                        AssistChip(
-                            onClick = { username = "admin" },
-                            label = { Text("注册 admin 后可登录 Web 管理后台") },
-                            leadingIcon = { Icon(Icons.Rounded.AdminPanelSettings, contentDescription = null) }
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = acceptedLegal, onCheckedChange = { acceptedLegal = it })
+                            Text("我已阅读并同意", color = Muted, fontSize = 12.sp)
+                            TextButton(onClick = { context.openUrl(legalUrl("terms")) }) {
+                                Text("用户协议", color = Green, fontSize = 12.sp)
+                            }
+                            Text("和", color = Muted, fontSize = 12.sp)
+                            TextButton(onClick = { context.openUrl(legalUrl("privacy")) }) {
+                                Text("隐私政策", color = Green, fontSize = 12.sp)
+                            }
+                        }
                     }
 
                     if (message.isNotBlank()) {
@@ -612,6 +606,9 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                                 trimmed.isBlank() || password.isBlank() -> {
                                     message = "请输入账号和密码"
                                 }
+                                isRegister && !acceptedLegal -> {
+                                    message = "请先阅读并同意用户协议和隐私政策"
+                                }
                                 isRegister -> {
                                     if (password.length < 8) {
                                         message = "密码至少需要 8 位"
@@ -621,13 +618,21 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                                     scope.launch {
                                         val result = runCatching {
                                             withContext(Dispatchers.IO) {
-                                                parseSignedInUser(api.register(trimmed, password, trimmed))
+                                                parseSignedInUser(
+                                                    api.register(
+                                                        trimmed,
+                                                        password,
+                                                        trimmed,
+                                                        acceptedTerms = true,
+                                                        acceptedPrivacy = true
+                                                    )
+                                                )
                                             }
                                         }
                                         loading = false
                                         result
                                             .onSuccess { user ->
-                                                message = if (user.role == "admin") "管理员账号已创建，请使用 Web 后台管理订单" else "账号已创建并同步到云端"
+                                                message = "账号已创建并同步到云端"
                                                 onSignedIn(user)
                                             }
                                             .onFailure { message = it.userFriendlyMessage("注册失败，请检查网络或账号密码") }
@@ -651,7 +656,7 @@ private fun AuthScreen(onSignedIn: (AppUser) -> Unit) {
                         },
                         enabled = !loading,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = AppButtonShape,
                         colors = primaryButtonColors(),
                         contentPadding = PaddingValues(vertical = 14.dp)
                     ) {
@@ -680,7 +685,7 @@ private fun StatusMessage(message: String, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = background,
-        shape = RoundedCornerShape(8.dp),
+        shape = AppInputShape,
         border = BorderStroke(1.dp, accent.copy(alpha = 0.22f))
     ) {
         Row(
@@ -712,7 +717,7 @@ private fun messageLooksLikeProblem(message: String): Boolean {
 
 @Composable
 private fun SoftTag(text: String) {
-    Surface(color = Color.White.copy(alpha = 0.78f), shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, Color.White)) {
+    Surface(color = Color.White.copy(alpha = 0.78f), shape = AppTagShape, border = BorderStroke(1.dp, Color.White)) {
         Text(
             text = text,
             color = Muted,
@@ -722,17 +727,6 @@ private fun SoftTag(text: String) {
         )
     }
 }
-
-@Composable
-private fun warmFilterChipColors() = FilterChipDefaults.filterChipColors(
-    containerColor = Color.White,
-    labelColor = Muted,
-    iconColor = Muted,
-    selectedContainerColor = Leaf,
-    selectedLabelColor = Green,
-    selectedLeadingIconColor = Green,
-    selectedTrailingIconColor = Green
-)
 
 @Composable
 private fun warmTextFieldColors() = OutlinedTextFieldDefaults.colors(
@@ -770,8 +764,8 @@ private fun RowScope.AuthModeButton(text: String, selected: Boolean, onClick: ()
         onClick = onClick,
         modifier = Modifier
             .weight(1f)
-            .background(bg, RoundedCornerShape(8.dp)),
-        shape = RoundedCornerShape(8.dp)
+            .background(bg, RoundedCornerShape(10.dp)),
+        shape = RoundedCornerShape(10.dp)
     ) {
         Text(text, color = fg, fontWeight = FontWeight.Bold)
     }
@@ -783,47 +777,7 @@ private fun MainScaffold(
     onUserChanged: (AppUser) -> Unit,
     onLogout: () -> Unit
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val api = remember(user.token) { AnyiApiClient(tokenProvider = { user.token }) }
     var selectedTab by rememberSaveable { mutableStateOf(ScreenTab.Hall) }
-    var showDigitalHuman by rememberSaveable { mutableStateOf(false) }
-    var digitalHumanUrl by rememberSaveable { mutableStateOf(defaultDigitalHumanUrl()) }
-    var openingDigitalHuman by remember { mutableStateOf(false) }
-
-    fun openDigitalHuman() {
-        if (openingDigitalHuman) return
-        openingDigitalHuman = true
-        scope.launch {
-            val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    val config = api.appConfig()
-                    val status = runCatching { api.digitalHumanStatus() }.getOrNull()
-                    config to status
-                }
-            }
-            openingDigitalHuman = false
-            result
-                .onSuccess { (config, status) ->
-                    val digitalHuman = config.optJSONObject("digitalHuman")
-                    if (digitalHuman?.optBoolean("enabled", true) == false) {
-                        Toast.makeText(context, "2D 数字人暂时维护中", Toast.LENGTH_SHORT).show()
-                        return@onSuccess
-                    }
-                    if (status?.optBoolean("ok", true) == false) {
-                        Toast.makeText(context, "2D 数字人服务正在启动，请稍后再试", Toast.LENGTH_SHORT).show()
-                        return@onSuccess
-                    }
-                    digitalHumanUrl = normalizedDigitalHumanUrl(digitalHuman?.optString("url"))
-                    showDigitalHuman = true
-                }
-                .onFailure {
-                    digitalHumanUrl = defaultDigitalHumanUrl()
-                    Toast.makeText(context, "数字人配置暂时获取失败，已使用默认线路", Toast.LENGTH_SHORT).show()
-                    showDigitalHuman = true
-                }
-        }
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -848,6 +802,9 @@ private fun MainScaffold(
                         .fillMaxSize()
                         .padding(top = 18.dp)
                         .padding(horizontal = 18.dp)
+                    ScreenTab.Companion -> Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
                     ScreenTab.Community -> Modifier.fillMaxSize()
                     else -> Modifier
                         .fillMaxSize()
@@ -861,11 +818,7 @@ private fun MainScaffold(
                     Box(modifier = Modifier.weight(1f)) {
                         when (selectedTab) {
                             ScreenTab.Hall -> MemorialHallScreen(user)
-                            ScreenTab.Companion -> AiCompanionScreen(
-                                user = user,
-                                openingDigitalHuman = openingDigitalHuman,
-                                onOpenDigitalHuman = ::openDigitalHuman
-                            )
+                            ScreenTab.Companion -> DigitalHumanCompanionScreen(user = user)
                             ScreenTab.Community -> HumanitiesCommunityScreen(user = user)
                             ScreenTab.Profile -> ProfileSettingsScreen(
                                 user = user,
@@ -877,11 +830,405 @@ private fun MainScaffold(
                 }
             }
         }
-        if (showDigitalHuman) {
-            DigitalHumanWebViewScreen(
-                url = digitalHumanUrl,
-                onClose = { showDigitalHuman = false },
-                modifier = Modifier.fillMaxSize()
+    }
+}
+
+private data class DigitalHumanCharacter(
+    val id: String,
+    val label: String,
+    val imageResId: Int? = null
+)
+
+private data class DigitalHumanMessage(
+    val sender: String,
+    val content: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+private val digitalHumanCharacters = listOf(
+    DigitalHumanCharacter(id = "grandpa", label = "爷爷", imageResId = R.drawable.anyi_digital_grandpa),
+    DigitalHumanCharacter(id = "grandma", label = "奶奶", imageResId = R.drawable.anyi_digital_grandma)
+)
+
+private fun initialDigitalHumanMessages(character: DigitalHumanCharacter): List<DigitalHumanMessage> {
+    if (character.id == "grandpa") {
+        return listOf(DigitalHumanMessage(sender = "assistant", content = "孩子，爷爷在这儿。有什么话慢慢说。"))
+    }
+    if (character.id == "grandma") {
+        return listOf(DigitalHumanMessage(sender = "assistant", content = "孩子，奶奶在呢。你想说什么，我都听着。"))
+    }
+    return emptyList()
+}
+
+private fun digitalHumanHistoryJson(messages: List<DigitalHumanMessage>): JSONArray {
+    val history = JSONArray()
+    messages.takeLast(12).forEach { message ->
+        history.put(
+            JSONObject()
+                .put("role", if (message.sender == "user") "user" else "assistant")
+                .put("content", message.content)
+        )
+    }
+    return history
+}
+
+@Composable
+private fun DigitalHumanCompanionScreen(user: AppUser) {
+    val api = remember(user.token) { AnyiApiClient(tokenProvider = { user.token }) }
+    val scope = rememberCoroutineScope()
+    var selectedCharacterId by rememberSaveable { mutableStateOf(digitalHumanCharacters.first().id) }
+    var digitalHumanChats by remember { mutableStateOf(emptyMap<String, List<DigitalHumanMessage>>()) }
+    var digitalHumanDrafts by remember { mutableStateOf(emptyMap<String, String>()) }
+    var sendingChatCharacterId by remember { mutableStateOf<String?>(null) }
+    val selectedCharacter = digitalHumanCharacters.firstOrNull { it.id == selectedCharacterId }
+        ?: digitalHumanCharacters.first()
+    val selectedMessages = digitalHumanChats[selectedCharacter.id]
+        ?: initialDigitalHumanMessages(selectedCharacter)
+    val selectedDraft = digitalHumanDrafts[selectedCharacter.id].orEmpty()
+
+    fun updateDraft(characterId: String, value: String) {
+        digitalHumanDrafts = digitalHumanDrafts + (characterId to value.take(500))
+    }
+
+    fun sendLocalDigitalHumanChat() {
+        val character = selectedCharacter
+        if (character.imageResId == null || sendingChatCharacterId != null) return
+        val content = selectedDraft.trim()
+        if (content.isBlank()) return
+        val priorMessages = digitalHumanChats[character.id] ?: initialDigitalHumanMessages(character)
+        val userMessage = DigitalHumanMessage(sender = "user", content = content)
+        digitalHumanChats = digitalHumanChats + (character.id to (priorMessages + userMessage))
+        updateDraft(character.id, "")
+        sendingChatCharacterId = character.id
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    api.digitalHumanChat(
+                        characterId = character.id,
+                        message = content,
+                        history = digitalHumanHistoryJson(priorMessages)
+                    )
+                }
+            }
+            val assistantMessage = result
+                .mapCatching { response ->
+                    val message = response.optJSONObject("message") ?: JSONObject()
+                    DigitalHumanMessage(
+                        sender = "assistant",
+                        content = message.optString("content").ifBlank { "我在这儿，刚才没听清，你再慢慢说一遍。" },
+                        createdAt = message.optLong("createdAt").takeIf { it > 0L } ?: System.currentTimeMillis()
+                    )
+                }
+                .getOrElse {
+                    DigitalHumanMessage(
+                        sender = "assistant",
+                        content = "我在这儿，刚才网络有点慢，你再说一遍我继续听。"
+                    )
+                }
+            val currentMessages = digitalHumanChats[character.id] ?: (priorMessages + userMessage)
+            digitalHumanChats = digitalHumanChats + (character.id to (currentMessages + assistantMessage))
+            if (sendingChatCharacterId == character.id) {
+                sendingChatCharacterId = null
+            }
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        LocalDigitalHumanStage(
+            character = selectedCharacter,
+            chatMessages = selectedMessages,
+            chatDraft = selectedDraft,
+            chatSending = sendingChatCharacterId == selectedCharacter.id,
+            onChatDraftChange = { updateDraft(selectedCharacter.id, it) },
+            onSendChat = ::sendLocalDigitalHumanChat,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        DigitalHumanCharacterSelector(
+            characters = digitalHumanCharacters,
+            selectedId = selectedCharacter.id,
+            onSelect = { selectedCharacterId = it },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 10.dp)
+        )
+
+    }
+}
+
+@Composable
+private fun DigitalHumanCharacterSelector(
+    characters: List<DigitalHumanCharacter>,
+    selectedId: String,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        color = Color.White.copy(alpha = 0.9f),
+        shape = RoundedCornerShape(999.dp),
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            characters.forEach { character ->
+                DigitalHumanCharacterPill(
+                    character = character,
+                    selected = character.id == selectedId,
+                    onClick = { onSelect(character.id) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DigitalHumanCharacterPill(
+    character: DigitalHumanCharacter,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val color = if (selected) Green else Color.Transparent
+    val contentColor = if (selected) Color.White else Ink
+    Surface(
+        modifier = Modifier
+            .height(38.dp)
+            .width(78.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick),
+        color = color,
+        shape = RoundedCornerShape(999.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = digitalHumanCharacterIcon(character),
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+                text = character.label,
+                color = contentColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun digitalHumanCharacterIcon(character: DigitalHumanCharacter): ImageVector {
+    return when (character.id) {
+        "grandpa" -> Icons.Rounded.Person
+        "grandma" -> Icons.Rounded.Favorite
+        else -> Icons.Rounded.Face
+    }
+}
+
+@Composable
+private fun LocalDigitalHumanStage(
+    character: DigitalHumanCharacter,
+    chatMessages: List<DigitalHumanMessage>,
+    chatDraft: String,
+    chatSending: Boolean,
+    onChatDraftChange: (String) -> Unit,
+    onSendChat: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val imageResId = character.imageResId ?: return
+    val idle = remember(character.id) { Animatable(0f) }
+
+    LaunchedEffect(character.id) {
+        while (true) {
+            idle.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 2200, easing = FastOutSlowInEasing)
+            )
+            idle.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = 2200, easing = FastOutSlowInEasing)
+            )
+            delay(300)
+        }
+    }
+
+    Box(modifier = modifier.background(Paper)) {
+        ComposeImage(
+            painter = painterResource(id = R.drawable.anyi_ai_page_bg),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val shadowWidth = size.width * 0.55f
+            val shadowHeight = size.height * 0.035f
+            drawOval(
+                color = Color.Black.copy(alpha = 0.16f),
+                topLeft = Offset(
+                    x = (size.width - shadowWidth) / 2f,
+                    y = size.height * 0.69f
+                ),
+                size = Size(shadowWidth, shadowHeight)
+            )
+        }
+        ComposeImage(
+            painter = painterResource(id = imageResId),
+            contentDescription = character.label,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 238.dp)
+                .fillMaxWidth(if (character.id == "grandpa") 0.78f else 0.72f)
+                .fillMaxHeight(if (character.id == "grandpa") 0.68f else 0.66f)
+                .graphicsLayer {
+                    val motion = idle.value
+                    scaleX = 1f + motion * 0.012f
+                    scaleY = 1f + motion * 0.016f
+                    rotationZ = (motion - 0.5f) * 0.6f
+                    translationY = -motion * 10f
+                },
+            contentScale = ContentScale.Fit
+        )
+        DigitalHumanChatPanel(
+            character = character,
+            messages = chatMessages,
+            draft = chatDraft,
+            sending = chatSending,
+            onDraftChange = onChatDraftChange,
+            onSend = onSendChat,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        )
+    }
+}
+
+@Composable
+private fun DigitalHumanChatPanel(
+    character: DigitalHumanCharacter,
+    messages: List<DigitalHumanMessage>,
+    draft: String,
+    sending: Boolean,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val visibleMessages = messages.takeLast(8)
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(visibleMessages.size, visibleMessages.lastOrNull()?.createdAt) {
+        if (visibleMessages.isNotEmpty()) {
+            listState.animateScrollToItem(visibleMessages.lastIndex)
+        }
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(214.dp),
+        color = Color.White.copy(alpha = 0.94f),
+        shape = RoundedCornerShape(8.dp),
+        shadowElevation = 10.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = character.label,
+                    color = Ink,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 14.sp
+                )
+            }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(bottom = 2.dp)
+            ) {
+                items(visibleMessages) { message ->
+                    DigitalHumanChatBubble(message)
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp),
+                    singleLine = true,
+                    placeholder = { Text("慢慢说，我听着", color = Muted, fontSize = 13.sp) },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, color = Ink),
+                    colors = warmTextFieldColors()
+                )
+                Button(
+                    onClick = onSend,
+                    enabled = draft.trim().isNotEmpty() && !sending,
+                    modifier = Modifier.size(50.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = primaryButtonColors(),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    if (sending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.Send,
+                            contentDescription = "发送",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DigitalHumanChatBubble(message: DigitalHumanMessage) {
+    val isUser = message.sender == "user"
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.78f),
+            color = if (isUser) Green else Color.White,
+            shape = RoundedCornerShape(8.dp),
+            border = if (isUser) null else BorderStroke(1.dp, Color(0xFFE8DDC8))
+        ) {
+            Text(
+                text = message.content,
+                color = if (isUser) Color.White else Ink,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
             )
         }
     }
@@ -892,6 +1239,8 @@ private fun MainScaffold(
 private fun DigitalHumanWebViewScreen(
     url: String,
     onClose: () -> Unit,
+    allowClose: Boolean = true,
+    showToolbar: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -937,7 +1286,7 @@ private fun DigitalHumanWebViewScreen(
         if (webView != null && webView.canGoBack()) {
             webView.goBack()
             canGoBack = webView.canGoBack()
-        } else {
+        } else if (allowClose) {
             closeScreen()
         }
     }
@@ -963,7 +1312,7 @@ private fun DigitalHumanWebViewScreen(
         }
     }
 
-    BackHandler(onBack = ::handleBack)
+    BackHandler(enabled = allowClose || canGoBack, onBack = ::handleBack)
 
     DisposableEffect(Unit) {
         onDispose {
@@ -1027,44 +1376,69 @@ private fun DigitalHumanWebViewScreen(
                             view: WebView,
                             request: WebResourceRequest
                         ): Boolean = false
+
+                        override fun shouldInterceptRequest(
+                            view: WebView,
+                            request: WebResourceRequest
+                        ): WebResourceResponse? {
+                            if (!request.method.equals("GET", ignoreCase = true)) {
+                                return null
+                            }
+                            val requestUrl = request.url?.toString().orEmpty()
+                            return context.openCachedCloudResourceResponse(requestUrl)
+                        }
                     }
                     loadUrl(url)
                     webViewHolder.value = this
                 }
+            },
+            update = { view ->
+                if (view.url != url) {
+                    isLoading = true
+                    pageError = null
+                    view.loadUrl(url)
+                }
+                webViewHolder.value = view
             }
         )
 
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            color = Color.Black.copy(alpha = 0.55f),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
+        if (showToolbar) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                color = Color.Black.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(8.dp)
             ) {
-                IconButton(onClick = ::handleBack) {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                        contentDescription = "返回",
-                        tint = if (canGoBack) Color.White else Color.White.copy(alpha = 0.86f),
-                        modifier = Modifier.graphicsLayer { rotationZ = 180f }
+                Row(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (allowClose || canGoBack) {
+                        IconButton(onClick = ::handleBack) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                contentDescription = "返回",
+                                tint = if (canGoBack) Color.White else Color.White.copy(alpha = 0.86f),
+                                modifier = Modifier.graphicsLayer { rotationZ = 180f }
+                            )
+                        }
+                    }
+                    Text(
+                        "2D 数字人",
+                        color = Color.White,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.weight(1f)
                     )
-                }
-                Text(
-                    "2D 数字人",
-                    color = Color.White,
-                    fontWeight = FontWeight.ExtraBold,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = { webViewHolder.value?.reload() }) {
-                    Icon(Icons.Rounded.Refresh, contentDescription = "刷新", tint = Color.White)
-                }
-                IconButton(onClick = ::closeScreen) {
-                    Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
+                    IconButton(onClick = { webViewHolder.value?.reload() }) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "刷新", tint = Color.White)
+                    }
+                    if (allowClose) {
+                        IconButton(onClick = ::closeScreen) {
+                            Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
+                        }
+                    }
                 }
             }
         }
@@ -1183,11 +1557,11 @@ private fun AnyiBottomBar(selectedTab: ScreenTab, onSelected: (ScreenTab) -> Uni
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        color = if (hallMode) HallWarmSurface.copy(alpha = 0.98f) else Color.White.copy(alpha = 0.98f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, if (hallMode) Color(0xFFEAD7B8) else Line.copy(alpha = 0.82f)),
-        shadowElevation = 6.dp
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        color = if (hallMode) HallWarmSurface.copy(alpha = 0.96f) else Color.White.copy(alpha = 0.96f),
+        shape = RoundedCornerShape(28.dp),
+        border = BorderStroke(1.dp, if (hallMode) Color(0xFFEAD7B8).copy(alpha = 0.85f) else Line.copy(alpha = 0.6f)),
+        shadowElevation = 8.dp
     ) {
         Row(
             modifier = Modifier
@@ -1203,7 +1577,7 @@ private fun AnyiBottomBar(selectedTab: ScreenTab, onSelected: (ScreenTab) -> Uni
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(22.dp))
                         .background(
                             when {
                                 selected && hallMode -> Color(0xFFFFE9BE)
@@ -1476,9 +1850,9 @@ private fun ProfileSettingsScreen(
                     Box(
                         modifier = Modifier
                             .size(82.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(CircleShape)
                             .background(Brush.linearGradient(listOf(Night, Green, Amber.copy(alpha = 0.86f))))
-                            .border(1.dp, Color.White.copy(alpha = 0.8f), RoundedCornerShape(8.dp)),
+                            .border(1.5.dp, Color.White.copy(alpha = 0.9f), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         val avatarBitmap = avatar
@@ -1499,7 +1873,7 @@ private fun ProfileSettingsScreen(
                         Text("账号：${user.username}", color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (user.role == "admin") {
                             Spacer(Modifier.height(6.dp))
-                            Surface(color = Leaf, shape = RoundedCornerShape(8.dp)) {
+                            Surface(color = Leaf, shape = AppTagShape) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
@@ -1518,7 +1892,7 @@ private fun ProfileSettingsScreen(
                     onClick = { avatarPicker.launch("image/*") },
                     enabled = !loading,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = AppButtonShape,
                     border = BorderStroke(1.dp, Line),
                     colors = quietOutlinedButtonColors()
                 ) {
@@ -1533,7 +1907,7 @@ private fun ProfileSettingsScreen(
                     onValueChange = { displayName = it.take(40) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = AppInputShape,
                     label = { Text("昵称") },
                     leadingIcon = { Icon(Icons.Rounded.Face, contentDescription = null) },
                     colors = warmTextFieldColors()
@@ -1544,7 +1918,7 @@ private fun ProfileSettingsScreen(
                     onClick = { saveProfile(avatarUrl.takeIf { it.isNotBlank() }) },
                     enabled = !loading,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = AppButtonShape,
                     colors = primaryButtonColors(),
                     contentPadding = PaddingValues(vertical = 13.dp)
                 ) {
@@ -1563,7 +1937,7 @@ private fun ProfileSettingsScreen(
                     OutlinedButton(
                         onClick = { context.openUrl(adminUrl()) },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = AppButtonShape,
                         border = BorderStroke(1.dp, Line),
                         colors = quietOutlinedButtonColors()
                     ) {
@@ -1592,7 +1966,7 @@ private fun ProfileSettingsScreen(
             OutlinedButton(
                 onClick = onLogout,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
+                shape = AppButtonShape,
                 border = BorderStroke(1.dp, Color(0xFFF04438).copy(alpha = 0.4f)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB42318)),
                 contentPadding = PaddingValues(vertical = 13.dp)
@@ -1976,27 +2350,17 @@ private fun MemorialHallScreen(user: AppUser) {
             icon = { Icon(Icons.Rounded.CardGiftcard, contentDescription = null, tint = Amber) },
             title = { Text("解锁云端纪念馆") },
             text = {
-                Text("解锁后开放纪念相册、更多供品、专属布景等入口。当前先记录到云端，真实支付可继续接入支付回调。")
+                Text("付费功能暂未开放。正式支付接入并通过验收后才会启用解锁。")
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        scope.launch {
-                            val result = runCatching {
-                                withContext(Dispatchers.IO) { api.unlockFeature("hall_more") }
-                            }
-                            result
-                                .onSuccess {
-                                    paidUnlocked = true
-                                    cloudMessage = "解锁状态已同步到云端"
-                                }
-                                .onFailure { cloudMessage = it.userFriendlyMessage("解锁失败") }
-                            showPayment = false
-                        }
+                        cloudMessage = "付费功能暂未开放"
+                        showPayment = false
                     },
                     colors = primaryButtonColors()
                 ) {
-                    Text("云端解锁")
+                    Text("知道了")
                 }
             },
             dismissButton = {
@@ -2066,16 +2430,16 @@ private fun MemorialHallScreen(user: AppUser) {
             shape = RoundedCornerShape(8.dp),
             icon = { Icon(Icons.Rounded.Redeem, contentDescription = null, tint = Amber) },
             title = { Text("供奉榴莲") },
-            text = { Text("榴莲属于付费供品。当前先用云端解锁记录模拟支付，接入真实支付后会改为支付成功回调再摆放。") },
+            text = { Text("付费供品暂未开放。正式支付接入并通过验收后才会启用。") },
             confirmButton = {
                 Button(
                     onClick = {
-                        offerFruit("durian", unlockDurian = true)
+                        cloudMessage = "付费供品暂未开放"
                         showDurianPayment = false
                     },
                     colors = primaryButtonColors()
                 ) {
-                    Text("付费供奉")
+                    Text("知道了")
                 }
             },
             dismissButton = {
@@ -3000,12 +3364,16 @@ private fun FruitOfferingsOnAltar(fruitOfferings: List<FruitOffering>, modifier:
         val apples = fruitOfferings.filter { it.type == "apple" }.take(3)
         val hasDurian = fruitOfferings.any { it.type == "durian" }
         if (apples.isNotEmpty()) {
+            val appleCount = apples.size
+            val applePlateWidth = if (appleCount == 2) 96.dp else 108.dp
+            val applePlateHeight = if (appleCount == 2) 70.dp else 78.dp
             ApplePlateOffering(
-                appleCount = apples.size,
+                appleCount = appleCount,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .width(108.dp)
-                    .height(78.dp)
+                    .width(applePlateWidth)
+                    .height(applePlateHeight)
+                    .offset(y = 4.dp)
             )
         }
         if (hasDurian) {
@@ -3022,25 +3390,50 @@ private fun FruitOfferingsOnAltar(fruitOfferings: List<FruitOffering>, modifier:
 @Composable
 private fun ApplePlateOffering(appleCount: Int, modifier: Modifier = Modifier) {
     val count = appleCount.coerceIn(1, 3)
-    ComposeImage(
-        painter = painterResource(id = appleOfferingImageRes(count)),
-        contentDescription = null,
-        contentScale = ContentScale.Fit,
-        modifier = modifier
-    )
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        // Grounding contact shadow that adapts to the size
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .fillMaxHeight(0.12f)
+                .offset(y = 3.dp)
+        ) {
+            drawOval(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0x66000000), Color.Transparent),
+                    center = Offset(size.width / 2, size.height / 2),
+                    radius = size.width / 2
+                )
+            )
+        }
+        ComposeImage(
+            painter = painterResource(id = appleOfferingImageRes(count)),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+            // Subtle ambient warm lighting filter to blend with the warm altar atmosphere
+            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                Color(0xFFFFFAF2).copy(alpha = 0.08f),
+                androidx.compose.ui.graphics.BlendMode.SrcAtop
+            )
+        )
+    }
 }
 
 private fun appleOfferingImageRes(count: Int): Int = when (count.coerceIn(1, 3)) {
-    1 -> R.drawable.anyi_hall_apples_one
-    2 -> R.drawable.anyi_hall_apples_two
-    else -> R.drawable.anyi_hall_apples_three
+    1 -> R.drawable.anyi_hall_apple_real
+    2 -> R.drawable.anyi_hall_apples_two_plate
+    else -> R.drawable.anyi_hall_apples_real
 }
 
 @Composable
 private fun FruitIcon(type: String, modifier: Modifier = Modifier) {
     ComposeImage(
         painter = painterResource(
-            id = if (type == "durian") R.drawable.anyi_hall_durian_real else R.drawable.anyi_hall_apples_one
+            id = if (type == "durian") R.drawable.anyi_hall_durian_real else R.drawable.anyi_hall_apple_real
         ),
         contentDescription = null,
         contentScale = ContentScale.Fit,
@@ -3063,9 +3456,9 @@ private fun FruitOfferingButton(
             .height(76.dp)
             .clickable(enabled = enabled, onClick = onClick),
         color = if (enabled) Color.White else Leaf.copy(alpha = 0.72f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, if (enabled) Line else Amber.copy(alpha = 0.55f)),
-        shadowElevation = 1.dp
+        shape = AppCardShape,
+        border = BorderStroke(1.dp, if (enabled) Line.copy(alpha = 0.7f) else Amber.copy(alpha = 0.55f)),
+        shadowElevation = 2.dp
     ) {
         Row(
             modifier = Modifier
@@ -3386,9 +3779,9 @@ private fun OfferingButton(
     Surface(
         modifier = modifier.height(96.dp),
         color = Color.White.copy(alpha = 0.94f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Line.copy(alpha = 0.5f)),
-        shadowElevation = 3.dp
+        shape = AppCardShape,
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.4f)),
+        shadowElevation = 4.dp
     ) {
         Box(
             modifier = Modifier
@@ -3434,8 +3827,8 @@ private fun OfferingButton(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(horizontal = 10.dp, vertical = 10.dp),
-                color = Color.White.copy(alpha = 0.84f),
-                shape = RoundedCornerShape(8.dp)
+                color = Color.White.copy(alpha = 0.86f),
+                shape = AppButtonShape
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
@@ -3562,828 +3955,6 @@ private fun GradientActionButton(text: String, icon: ImageVector, onClick: () ->
 }
 
 @Composable
-private fun AiCompanionScreen(
-    user: AppUser,
-    openingDigitalHuman: Boolean,
-    onOpenDigitalHuman: () -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val api = remember(user.token) { AnyiApiClient(tokenProvider = { user.token }) }
-    val companions = remember { mutableStateListOf<AiCompanion>() }
-    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
-    var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var chatInput by rememberSaveable { mutableStateOf("") }
-    var cloudMessage by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    var sendingChat by remember { mutableStateOf(false) }
-    var uploadingAvatar by rememberSaveable { mutableStateOf(false) }
-    val chatMessages = remember { mutableStateListOf<ChatMessage>() }
-    val selected = companions.firstOrNull { it.id == selectedId }
-    val selectedAvatarUrl = selected?.smileAvatarUrl ?: selected?.avatarUrl
-    val selectedHasSmileAvatar = !selected?.smileAvatarUrl.isNullOrBlank()
-    val selectedAvatar by rememberUriImage(selectedAvatarUrl)
-    val selectedMotion = selected?.avatarMotion
-    var createName by rememberSaveable { mutableStateOf("") }
-    var createGender by rememberSaveable { mutableStateOf("女性") }
-    var createRelation by rememberSaveable { mutableStateOf("母亲") }
-
-    fun upsertCompanion(companion: AiCompanion) {
-        val index = companions.indexOfFirst { it.id == companion.id }
-        if (index >= 0) {
-            companions[index] = companion
-        } else {
-            companions.add(0, companion)
-        }
-    }
-
-    fun loadMessages(companionId: String) {
-        scope.launch {
-            loading = true
-            val result = runCatching {
-                withContext(Dispatchers.IO) { parseChatMessages(api.listAiMessages(companionId)) }
-            }
-            loading = false
-            result
-                .onSuccess { messages ->
-                    chatMessages.clear()
-                    chatMessages.addAll(messages)
-                }
-                .onFailure { cloudMessage = it.userFriendlyMessage("AI 陪伴加载失败") }
-        }
-    }
-
-    fun refreshCompanions() {
-        scope.launch {
-            loading = true
-            val result = runCatching {
-                withContext(Dispatchers.IO) { parseAiCompanions(api.listAiCompanions()) }
-            }
-            loading = false
-            result
-                .onSuccess { rows ->
-                    companions.clear()
-                    companions.addAll(rows)
-                    selectedId?.let { id ->
-                        if (rows.any { it.id == id }) {
-                            loadMessages(id)
-                        } else {
-                            selectedId = null
-                            chatMessages.clear()
-                        }
-                    }
-                }
-                .onFailure { cloudMessage = it.userFriendlyMessage("AI 陪伴加载失败") }
-        }
-    }
-
-    LaunchedEffect(user.token) {
-        refreshCompanions()
-    }
-
-    fun sendChatMessage() {
-        val companion = selected ?: return
-        val content = chatInput.trim()
-        if (content.isBlank() || sendingChat) return
-        chatInput = ""
-        cloudMessage = ""
-        scope.launch {
-            sendingChat = true
-            val result = runCatching {
-                withContext(Dispatchers.IO) { parseChatMessages(api.sendAiMessage(companion.id, content)) }
-            }
-            sendingChat = false
-            result
-                .onSuccess { messages ->
-                    val existingIds = chatMessages.map { it.id }.toSet()
-                    val newMessages = messages.filter { it.id.isBlank() || it.id !in existingIds }
-                    chatMessages.addAll(newMessages)
-                }
-                .onFailure {
-                    chatInput = content
-                    cloudMessage = it.userFriendlyMessage("消息发送失败")
-                }
-        }
-    }
-
-    val companionAvatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        val companionId = selectedId
-        if (uri == null || companionId == null || uploadingAvatar) {
-            return@rememberLauncherForActivityResult
-        }
-        context.persistReadPermission(uri)
-        cloudMessage = ""
-        uploadingAvatar = true
-        scope.launch {
-            val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    val payload = context.readUploadPayload(uri)
-                    val response = api.uploadAiCompanionAsset(
-                        companionId = companionId,
-                        kind = "avatar",
-                        fileName = payload.fileName,
-                        mimeType = payload.mimeType,
-                        bytes = payload.bytes
-                    )
-                    parseAiCompanion(response.getJSONObject("companion"))
-                }
-            }
-            uploadingAvatar = false
-            result
-                .onSuccess { updated ->
-                    upsertCompanion(updated)
-                    selectedId = updated.id
-                    cloudMessage = when {
-                        !updated.smileAvatarUrl.isNullOrBlank() ->
-                            "头像已识别，已生成真实微笑头像，说话嘴型也已匹配"
-                        (updated.avatarMotion?.confidence ?: 0f) > 0.2f ->
-                            "头像已识别，说话嘴型已匹配；真实微笑生成失败，请检查图片模型接口"
-                        else ->
-                            "头像已更新，未识别到清晰人脸，已使用默认动作"
-                    }
-                }
-                .onFailure { cloudMessage = it.userFriendlyMessage("上传头像失败") }
-        }
-    }
-
-    if (showCreateDialog) {
-        AlertDialog(
-            onDismissRequest = { showCreateDialog = false },
-            title = { Text("新建陪伴人物", fontWeight = FontWeight.ExtraBold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = createName,
-                        onValueChange = { createName = it },
-                        singleLine = true,
-                        label = { Text("人物名称") },
-                        shape = RoundedCornerShape(8.dp),
-                        colors = warmTextFieldColors()
-                    )
-                    ChipRow(
-                        title = "身份",
-                        options = listOf("母亲", "父亲", "祖辈", "伴侣", "朋友", "宠物"),
-                        selected = createRelation,
-                        onSelect = { createRelation = it }
-                    )
-                    ChipRow(
-                        title = "性别",
-                        options = listOf("女性", "男性", "不限定"),
-                        selected = createGender,
-                        onSelect = { createGender = it }
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        scope.launch {
-                            loading = true
-                            val result = runCatching {
-                                withContext(Dispatchers.IO) {
-                                    parseAiCompanion(
-                                        api.createAiCompanion(
-                                            createName.ifBlank { createRelation },
-                                            createGender,
-                                            createRelation
-                                        )
-                                    )
-                                }
-                            }
-                            loading = false
-                            result
-                                .onSuccess {
-                                    upsertCompanion(it)
-                                    selectedId = it.id
-                                    showCreateDialog = false
-                                    createName = ""
-                                    chatMessages.clear()
-                                    cloudMessage = "已创建陪伴人物"
-                                }
-                                .onFailure { cloudMessage = it.userFriendlyMessage("创建失败") }
-                        }
-                    }
-                ) {
-                    Text("创建")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) {
-                    Text("取消")
-                }
-            },
-            containerColor = Paper
-        )
-    }
-
-    if (selected == null) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            DigitalHumanEntryCard(
-                opening = openingDigitalHuman,
-                onClick = onOpenDigitalHuman
-            )
-            Button(
-                onClick = { showCreateDialog = true },
-                enabled = !loading,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                colors = primaryButtonColors(),
-                contentPadding = PaddingValues(vertical = 15.dp)
-            ) {
-                Icon(Icons.Rounded.Add, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("新建陪伴人物", fontWeight = FontWeight.Bold)
-            }
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                if (companions.isEmpty()) {
-                    item {
-                        Panel {
-                            Text(
-                                if (loading) "正在同步陪伴人物..." else "还没有陪伴人物",
-                                color = Muted,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                } else {
-                    items(companions, key = { it.id }) { companion ->
-                        AiCompanionListRow(companion = companion) {
-                            selectedId = companion.id
-                            chatMessages.clear()
-                            loadMessages(companion.id)
-                        }
-                    }
-                }
-            }
-            if (cloudMessage.isNotBlank()) {
-                StatusMessage(message = cloudMessage)
-            }
-        }
-        return
-    }
-
-    Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        selectedId = null
-                        chatMessages.clear()
-                    },
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, Line),
-                    colors = quietOutlinedButtonColors()
-                ) {
-                    Text("返回")
-                }
-                Spacer(Modifier.width(10.dp))
-                AnimatedCompanionAvatar(
-                    avatar = selectedAvatar,
-                    size = 40.dp,
-                    motion = selectedMotion,
-                    speaking = sendingChat,
-                    smiling = !selectedHasSmileAvatar
-                )
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(selected.displayName, color = Ink, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${selected.relation} · ${selected.gender}", color = Muted, fontSize = 12.sp)
-                }
-                IconButton(
-                    onClick = { companionAvatarPicker.launch(arrayOf("image/*")) },
-                    enabled = !uploadingAvatar && !loading
-                ) {
-                    if (uploadingAvatar) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = Green,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Icon(Icons.Rounded.PhotoCamera, contentDescription = "上传头像", tint = Green)
-                    }
-                }
-            }
-            ChatWindow(
-                modifier = Modifier.weight(1f),
-                avatar = selectedAvatar,
-                avatarMotion = selectedMotion,
-                smiling = !selectedHasSmileAvatar,
-                relation = selected.displayName,
-                messages = chatMessages,
-                input = chatInput,
-                onInputChange = { chatInput = it },
-                onSend = ::sendChatMessage,
-                isSending = sendingChat
-            )
-            if (cloudMessage.isNotBlank()) {
-                StatusMessage(message = cloudMessage)
-            }
-        }
-}
-
-@Composable
-private fun DigitalHumanEntryCard(
-    opening: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        color = Color(0xFFFFFBF2),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Color(0xFFEAD7B7)),
-        shadowElevation = 2.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(50.dp)
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFFFFD88A), Color(0xFFD9EEF8))
-                        ),
-                        RoundedCornerShape(8.dp)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Rounded.Face, contentDescription = null, tint = Ink)
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "2D 数字人陪伴",
-                    color = Ink,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    "Live2D 形象语音对话",
-                    color = Muted,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            if (opening) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    color = Green,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Text("进入", color = Green, fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
-            }
-        }
-    }
-}
-
-@Composable
-private fun AiCompanionListRow(companion: AiCompanion, onClick: () -> Unit) {
-    val avatar by rememberUriImage(companion.smileAvatarUrl ?: companion.avatarUrl)
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        color = Paper,
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Line),
-        shadowElevation = 1.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            CompanionAvatar(avatar = avatar, size = 48.dp)
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        companion.displayName,
-                        color = Ink,
-                        fontWeight = FontWeight.ExtraBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    if (companion.isDefault) {
-                        Spacer(Modifier.width(6.dp))
-                        SoftTag("默认")
-                    }
-                }
-                Text(
-                    "${companion.relation} · ${companion.gender}",
-                    color = Muted,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            Text("聊天", color = Green, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-        }
-    }
-}
-
-@Composable
-private fun ChipRow(title: String, options: List<String>, selected: String, onSelect: (String) -> Unit) {
-    Text(title, color = Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-    Spacer(Modifier.height(6.dp))
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        options.forEach { option ->
-            FilterChip(
-                selected = option == selected,
-                onClick = { onSelect(option) },
-                label = { Text(option) },
-                colors = warmFilterChipColors()
-            )
-        }
-    }
-}
-
-@Composable
-private fun ChatWindow(
-    modifier: Modifier = Modifier,
-    avatar: ImageBitmap?,
-    avatarMotion: AvatarMotion?,
-    smiling: Boolean,
-    relation: String,
-    messages: List<ChatMessage>,
-    input: String,
-    onInputChange: (String) -> Unit,
-    onSend: () -> Unit,
-    isSending: Boolean
-) {
-    val messageListState = rememberLazyListState()
-    val lastAssistantMessage = messages.lastOrNull { it.sender != "user" }
-    var recentlySpeaking by remember { mutableStateOf(false) }
-
-    LaunchedEffect(lastAssistantMessage?.speechUtteranceId()) {
-        if (lastAssistantMessage == null) {
-            return@LaunchedEffect
-        }
-        recentlySpeaking = true
-        delay(2600)
-        recentlySpeaking = false
-    }
-    val avatarSpeaking = isSending || recentlySpeaking
-
-    LaunchedEffect(messages.size, messages.lastOrNull()?.id) {
-        if (messages.isNotEmpty()) {
-            messageListState.animateScrollToItem(messages.lastIndex)
-        }
-    }
-
-    Panel(modifier = modifier.fillMaxWidth()) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = Color.White.copy(alpha = 0.88f),
-            shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(1.dp, Line)
-        ) {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AnimatedCompanionAvatar(
-                    avatar = avatar,
-                    size = 72.dp,
-                    motion = avatarMotion,
-                    speaking = avatarSpeaking,
-                    smiling = smiling
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(relation, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
-                    Text(
-                        if (avatarSpeaking) "正在回应" else "在线陪伴",
-                        color = Muted,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        SectionTitle("聊天窗口", "消息保存到云端，AI 回复由服务端生成")
-        Spacer(Modifier.height(12.dp))
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            color = Paper.copy(alpha = 0.82f),
-            shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(1.dp, Line)
-        ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                state = messageListState,
-                contentPadding = PaddingValues(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                if (messages.isEmpty()) {
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CompanionAvatar(avatar = avatar, size = 36.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Surface(color = Color.White, shape = RoundedCornerShape(8.dp)) {
-                                Text(
-                                    "我在这里。你可以先和我说一句想说的话。",
-                                    color = Ink,
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    items(
-                        items = messages,
-                        key = { message -> "${message.id}-${message.createdAt}-${message.sender}" }
-                    ) { message ->
-                        ChatBubble(message = message, avatar = avatar, relation = relation)
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInputChange,
-                modifier = Modifier.weight(1f),
-                enabled = !isSending,
-                singleLine = true,
-                shape = RoundedCornerShape(8.dp),
-                label = { Text("输入消息") },
-                colors = warmTextFieldColors()
-            )
-            Button(
-                onClick = onSend,
-                enabled = input.isNotBlank() && !isSending,
-                shape = RoundedCornerShape(8.dp),
-                colors = primaryButtonColors(),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp)
-            ) {
-                if (isSending) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "发送")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChatBubble(message: ChatMessage, avatar: ImageBitmap?, relation: String) {
-    val isUser = message.sender == "user"
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Top
-    ) {
-        if (!isUser) {
-            CompanionAvatar(avatar = avatar, size = 32.dp)
-            Spacer(Modifier.width(7.dp))
-        }
-        Surface(
-            modifier = Modifier.fillMaxWidth(0.78f),
-            color = if (isUser) Night else Color.White,
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
-                Text(
-                    text = if (isUser) "我" else relation,
-                    color = if (isUser) Color.White.copy(alpha = 0.72f) else Muted,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = message.content,
-                    color = if (isUser) Color.White else Ink,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AnimatedCompanionAvatar(
-    avatar: ImageBitmap?,
-    size: Dp,
-    motion: AvatarMotion?,
-    speaking: Boolean,
-    smiling: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val transition = rememberInfiniteTransition(label = "companionAvatar")
-    val breath by transition.animateFloat(
-        initialValue = 0.98f,
-        targetValue = 1.02f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "breath"
-    )
-    val sway by transition.animateFloat(
-        initialValue = -0.8f,
-        targetValue = 0.8f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "sway"
-    )
-    val mouth by transition.animateFloat(
-        initialValue = 0.15f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(380, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "mouth"
-    )
-    val smilePhase by transition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 0.82f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "smile"
-    )
-
-    Box(
-        modifier = modifier
-            .size(size)
-            .graphicsLayer {
-                scaleX = breath
-                scaleY = breath
-                rotationZ = sway
-            }
-            .clip(RoundedCornerShape(8.dp))
-            .background(Brush.linearGradient(listOf(Blush, BlueMist))),
-        contentAlignment = Alignment.Center
-    ) {
-        if (avatar != null) {
-            ComposeImage(
-                bitmap = avatar,
-                contentDescription = "闄即澶村儚",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            ComposeImage(
-                painter = painterResource(id = R.drawable.anyi_ai_avatar),
-                contentDescription = "闄即澶村儚",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val canvasSize = this.size
-            val mouthBox = motion?.mouth ?: AvatarMotionBox(0.5f, 0.68f, 0.18f, 0.06f)
-            val mouthWidth = (canvasSize.width * mouthBox.w).coerceAtLeast(8.dp.toPx())
-            val baseMouthHeight = (canvasSize.height * mouthBox.h).coerceAtLeast(4.dp.toPx())
-            val mouthHeight = if (speaking) baseMouthHeight * (0.8f + mouth * 1.25f) else baseMouthHeight * (0.42f + smilePhase * 0.18f)
-            val mouthCenter = Offset(canvasSize.width * mouthBox.x, canvasSize.height * mouthBox.y)
-            val mouthTopLeft = Offset(mouthCenter.x - mouthWidth / 2f, mouthCenter.y - mouthHeight / 2f)
-            if (avatar != null) {
-                if (speaking) {
-                    drawRoundRect(
-                        color = Night.copy(alpha = 0.68f),
-                        topLeft = mouthTopLeft,
-                        size = Size(mouthWidth, mouthHeight),
-                        cornerRadius = CornerRadius(mouthHeight, mouthHeight)
-                    )
-                    drawArc(
-                        color = Color.White.copy(alpha = 0.58f),
-                        startAngle = 18f,
-                        sweepAngle = 144f,
-                        useCenter = false,
-                        topLeft = Offset(mouthTopLeft.x + mouthWidth * 0.12f, mouthTopLeft.y + mouthHeight * 0.16f),
-                        size = Size(mouthWidth * 0.76f, mouthHeight * 0.82f),
-                        style = Stroke(width = 1.2.dp.toPx())
-                    )
-                } else if (smiling) {
-                    drawArc(
-                        color = Night.copy(alpha = 0.72f),
-                        startAngle = 18f,
-                        sweepAngle = 144f,
-                        useCenter = false,
-                        topLeft = Offset(mouthTopLeft.x, mouthTopLeft.y - mouthHeight * 0.15f),
-                        size = Size(mouthWidth, mouthHeight * 2.4f),
-                        style = Stroke(width = 2.dp.toPx())
-                    )
-                }
-            } else {
-                drawCircle(
-                    color = Rose.copy(alpha = 0.16f),
-                    radius = canvasSize.minDimension * 0.065f,
-                    center = Offset(canvasSize.width * 0.32f, canvasSize.height * 0.53f)
-                )
-                drawCircle(
-                    color = Rose.copy(alpha = 0.16f),
-                    radius = canvasSize.minDimension * 0.065f,
-                    center = Offset(canvasSize.width * 0.68f, canvasSize.height * 0.53f)
-                )
-                if (speaking) {
-                    drawRoundRect(
-                        color = Night.copy(alpha = 0.82f),
-                        topLeft = mouthTopLeft,
-                        size = Size(mouthWidth, mouthHeight),
-                        cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx())
-                    )
-                } else if (smiling) {
-                    drawArc(
-                        color = Night.copy(alpha = 0.62f),
-                        startAngle = 18f,
-                        sweepAngle = 142f,
-                        useCenter = false,
-                        topLeft = Offset(mouthTopLeft.x, mouthTopLeft.y),
-                        size = Size(mouthWidth, mouthHeight * 2.4f),
-                        style = Stroke(width = 2.dp.toPx())
-                    )
-                }
-                val eyeHeight = if (smilePhase > 0.7f) 4.dp.toPx() else 6.dp.toPx()
-                drawRoundRect(
-                    color = Night.copy(alpha = 0.82f),
-                    topLeft = Offset(canvasSize.width * 0.42f, canvasSize.height * 0.31f),
-                    size = Size(8.dp.toPx(), eyeHeight),
-                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
-                )
-                drawRoundRect(
-                    color = Night.copy(alpha = 0.82f),
-                    topLeft = Offset(canvasSize.width * 0.58f, canvasSize.height * 0.31f),
-                    size = Size(8.dp.toPx(), eyeHeight),
-                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompanionAvatar(avatar: ImageBitmap?, size: androidx.compose.ui.unit.Dp) {
-    Box(
-        modifier = Modifier
-            .size(size)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Brush.linearGradient(listOf(Blush, BlueMist))),
-        contentAlignment = Alignment.Center
-    ) {
-        if (avatar != null) {
-            ComposeImage(
-                bitmap = avatar,
-                contentDescription = "陪伴头像",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            ComposeImage(
-                painter = painterResource(id = R.drawable.anyi_ai_avatar),
-                contentDescription = "陪伴头像",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-    }
-}
-
-@Composable
 private fun HumanitiesCommunityScreen(user: AppUser) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -4414,6 +3985,7 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
     var selectedVolunteerDetail by remember { mutableStateOf<CommunityVolunteerPost?>(null) }
     var volunteerCoverUri by remember { mutableStateOf<String?>(null) }
     var applyingVolunteer by remember { mutableStateOf<CommunityVolunteerPost?>(null) }
+    var reportingPost by remember { mutableStateOf<CommunityPost?>(null) }
 
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { context.persistReadPermission(it) }
@@ -4516,7 +4088,11 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
                     showPublishDialog = false
                     posts = listOf(post) + posts.filterNot { it.id == post.id }
                     postComments = postComments + (post.id to emptyList())
-                    message = "已发布到人文社区"
+                    message = if (post.moderationStatus == "pending") {
+                        "已提交，审核通过后会对其他用户显示"
+                    } else {
+                        "已发布到人文社区"
+                    }
                 }
                 .onFailure { message = it.userFriendlyMessage("发布失败") }
         }
@@ -4651,6 +4227,20 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
         }
     }
 
+    fun reportPost(post: CommunityPost) {
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    api.reportCommunityContent("post", post.id, "用户举报：内容可能不当")
+                }
+            }
+            reportingPost = null
+            result
+                .onSuccess { message = "举报已提交，管理员会尽快处理" }
+                .onFailure { message = it.userFriendlyMessage("举报提交失败") }
+        }
+    }
+
     fun openVolunteerInfo() {
         showVolunteer = true
         refreshVolunteerApplications()
@@ -4658,7 +4248,7 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
 
     fun publishVolunteer(title: String, body: String, contact: String, coverUri: String?) {
         if (title.trim().isBlank() || body.trim().isBlank()) {
-            message = "请填写义工标题和内容"
+            message = "请填写义工招募标题和内容"
             return
         }
         val pendingCoverUri = coverUri?.takeIf { it.isNotBlank() }
@@ -4745,7 +4335,7 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
     }
 
     val volunteerOverlayOpen = showVolunteer || applyingVolunteer != null
-    Box(modifier = Modifier.fillMaxSize().background(WechatScreen)) {
+    Box(modifier = Modifier.fillMaxSize().background(HallWarmBackground)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -4761,8 +4351,8 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(0.dp)
+                contentPadding = PaddingValues(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 item {
                     CommunityMomentsCover(
@@ -4780,7 +4370,7 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
                 }
                 if (message.isNotBlank()) {
                     item {
-                        Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                             StatusMessage(message = message)
                         }
                     }
@@ -4788,7 +4378,7 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
                 if (loading && posts.isEmpty()) {
                     item {
                         Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = WechatGreen)
+                            CircularProgressIndicator(color = Green)
                         }
                     }
                 }
@@ -4807,13 +4397,15 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
                         commentInputVisible = inlineCommentPostId == post.id,
                         commentPosting = postingCommentPostId == post.id,
                         canDeletePost = post.authorId == user.id || isAdmin,
+                        canReportPost = post.authorId != user.id,
                         deletingPost = deletingPostId == post.id,
                         canDeleteComment = { comment ->
-                            isAdmin || (post.authorId == user.id && comment.authorId != user.id)
+                            isAdmin || post.authorId == user.id || comment.authorId == user.id
                         },
                         deletingCommentId = deletingCommentId,
                         onLike = { likePost(post) },
                         onComment = { openInlineComment(post) },
+                        onReportPost = { reportingPost = post },
                         onDeletePost = { deletePost(post) },
                         onDeleteComment = { comment -> deleteComment(post, comment) },
                         onCommentDraftChange = { inlineCommentDraft = it.take(300) },
@@ -4869,6 +4461,30 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
         )
     }
 
+    reportingPost?.let { post ->
+        AlertDialog(
+            onDismissRequest = { reportingPost = null },
+            containerColor = Paper,
+            shape = RoundedCornerShape(8.dp),
+            icon = { Icon(Icons.Rounded.Flag, contentDescription = null, tint = Rose) },
+            title = { Text("举报这条动态") },
+            text = { Text("确认后将提交给管理员审核。") },
+            confirmButton = {
+                Button(
+                    onClick = { reportPost(post) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Rose)
+                ) {
+                    Text("提交举报")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { reportingPost = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     applyingVolunteer?.let { volunteer ->
         CommunityVolunteerApplicationDialog(
             volunteer = volunteer,
@@ -4879,7 +4495,6 @@ private fun HumanitiesCommunityScreen(user: AppUser) {
             }
         )
     }
-
 }
 
 @Composable
@@ -4890,44 +4505,37 @@ private fun CommunityFeedHeader(
     onPublish: () -> Unit
 ) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(WechatScreen),
-        color = WechatScreen,
-        shadowElevation = 0.dp
+        modifier = Modifier.fillMaxWidth(),
+        color = Paper,
+        border = BorderStroke(0.dp, Color.Transparent),
+        shadowElevation = 1.dp
     ) {
         Column(modifier = Modifier.statusBarsPadding()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp)
-                    .padding(horizontal = 6.dp),
+                    .height(56.dp)
+                    .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onRefresh, enabled = !loading) {
                     if (loading) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
-                            color = WechatGreen,
+                            color = Green,
                             strokeWidth = 2.dp
                         )
                     } else {
-                        Icon(Icons.Rounded.AutoAwesome, contentDescription = "刷新", tint = Ink)
+                        Icon(Icons.Rounded.AutoAwesome, contentDescription = "刷新", tint = Green)
                     }
                 }
                 Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Text("人文社区", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+                    Text("人文社区", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
                 IconButton(onClick = onPublish) {
-                    Icon(Icons.Rounded.PhotoCamera, contentDescription = "发布动态", tint = Ink)
+                    Icon(Icons.Rounded.PhotoCamera, contentDescription = "发布动态", tint = Green)
                 }
             }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(WechatDivider)
-            )
         }
     }
 }
@@ -4938,72 +4546,86 @@ private fun CommunityMomentsCover(
     postCount: Int,
     onPublish: () -> Unit
 ) {
-    Box(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(224.dp)
-            .background(Color.White)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        color = Paper,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.5f)),
+        shadowElevation = 0.5.dp
     ) {
-        ComposeImage(
-            painter = painterResource(id = R.drawable.anyi_hall_page_bg),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(176.dp)
-        )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(176.dp)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.Transparent,
-                            Night.copy(alpha = 0.12f),
-                            Night.copy(alpha = 0.34f)
+                .height(180.dp)
+        ) {
+            ComposeImage(
+                painter = painterResource(id = R.drawable.anyi_hall_page_bg),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Transparent,
+                                Night.copy(alpha = 0.2f),
+                                Night.copy(alpha = 0.65f)
+                            )
                         )
                     )
-                )
-        )
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 18.dp, bottom = 18.dp),
-            verticalAlignment = Alignment.Bottom
-        ) {
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    user.displayName.ifBlank { user.username },
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    "共 $postCount 条动态",
-                    color = Color.White.copy(alpha = 0.86f),
-                    fontSize = 11.sp
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            CommunityAvatar(
-                name = user.displayName.ifBlank { user.username },
-                avatarUrl = user.avatarUrl,
-                size = 58.dp
             )
-        }
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 14.dp, bottom = 20.dp),
-            color = Color.White.copy(alpha = 0.92f),
-            shape = RoundedCornerShape(6.dp),
-            shadowElevation = 1.dp
-        ) {
-            IconButton(onClick = onPublish) {
-                Icon(Icons.Rounded.Add, contentDescription = "发布动态", tint = WechatGreen)
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(16.dp)
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CommunityAvatar(
+                    name = user.displayName.ifBlank { user.username },
+                    avatarUrl = user.avatarUrl,
+                    size = 54.dp
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        user.displayName.ifBlank { user.username },
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        "共记录了 $postCount 条动态",
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 11.sp
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = onPublish,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.White.copy(alpha = 0.9f),
+                        contentColor = Ink
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        Icons.Rounded.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = Green
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("发布动态", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Ink)
+                }
             }
         }
     }
@@ -5017,27 +4639,66 @@ private fun CommunityVolunteerCarousel(
 ) {
     val item = volunteers.getOrNull(index % volunteers.size.coerceAtLeast(1))
         ?: defaultCommunityVolunteerPosts().first()
-    Column(modifier = Modifier.fillMaxWidth().background(Color.White)) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(
+                        Leaf.copy(alpha = 0.8f),
+                        Blush.copy(alpha = 0.9f)
+                    )
+                )
+            )
+            .border(BorderStroke(1.dp, Line.copy(alpha = 0.5f)), RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(14.dp)
+    ) {
         Row(
-            modifier = Modifier
-                .clickable(onClick = onClick)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Surface(
-                color = WechatGreen,
-                shape = RoundedCornerShape(6.dp)
+                color = Rose.copy(alpha = 0.15f),
+                shape = CircleShape,
+                modifier = Modifier.size(38.dp)
             ) {
-                Icon(
-                    Icons.Rounded.Favorite,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.padding(8.dp).size(20.dp)
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Rounded.Favorite,
+                        contentDescription = null,
+                        tint = Rose,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
-            Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("义工招募", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "暖心义工 · 互助招募",
+                        color = Ink,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Surface(
+                        color = Green.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            "招募中",
+                            color = Green,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
                 Text(
                     item.title,
                     color = Muted,
@@ -5046,22 +4707,13 @@ private fun CommunityVolunteerCarousel(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Spacer(Modifier.width(8.dp))
             Icon(
                 Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                 contentDescription = null,
-                tint = Muted,
-                modifier = Modifier.size(22.dp)
+                tint = Green,
+                modifier = Modifier.size(20.dp)
             )
         }
-        Box(
-            modifier = Modifier
-                .padding(start = 58.dp)
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(WechatDivider)
-        )
-        Spacer(Modifier.height(8.dp).fillMaxWidth().background(WechatScreen))
     }
 }
 
@@ -5076,12 +4728,12 @@ private fun CommunityInlineAction(
     val resolvedTint = if (enabled) tint else tint.copy(alpha = 0.55f)
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
+            .clip(RoundedCornerShape(8.dp))
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, contentDescription = null, tint = resolvedTint, modifier = Modifier.size(17.dp))
+        Icon(icon, contentDescription = null, tint = resolvedTint, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(4.dp))
         Text(text, color = resolvedTint, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
@@ -5101,15 +4753,24 @@ private fun CommunityInteractionSummary(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(WechatComment, RoundedCornerShape(4.dp))
-            .padding(horizontal = 9.dp, vertical = 7.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+            .background(HallWarmSurface, RoundedCornerShape(12.dp))
+            .border(BorderStroke(1.dp, Line.copy(alpha = 0.3f)), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (post.likeCount > 0) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Favorite, contentDescription = null, tint = WechatBlue, modifier = Modifier.size(14.dp))
-                Spacer(Modifier.width(5.dp))
-                Text("${post.likeCount} 人觉得有帮助", color = WechatBlue, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Icon(Icons.Rounded.Favorite, contentDescription = null, tint = Rose, modifier = Modifier.size(13.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("${post.likeCount} 人觉得有帮助", color = Rose, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            }
+            if (comments.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Line.copy(alpha = 0.4f))
+                )
             }
         }
         when {
@@ -5119,12 +4780,15 @@ private fun CommunityInteractionSummary(
             comments.isNotEmpty() -> {
                 comments.forEach { comment ->
                     val deleting = deletingCommentId == comment.id
-                    Row(verticalAlignment = Alignment.Top) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top
+                    ) {
                         Text(
                             "${comment.authorName}：",
-                            color = WechatBlue,
+                            color = Green,
                             fontSize = 12.sp,
-                            fontWeight = FontWeight.ExtraBold
+                            fontWeight = FontWeight.Bold
                         )
                         Text(
                             comment.content,
@@ -5133,17 +4797,24 @@ private fun CommunityInteractionSummary(
                             lineHeight = 17.sp,
                             modifier = Modifier.weight(1f)
                         )
+                        if (comment.moderationStatus != "approved") {
+                            Text(
+                                if (comment.moderationStatus == "pending") "审核中" else "已隐藏",
+                                color = if (comment.moderationStatus == "pending") Amber else Rose,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                         if (canDeleteComment(comment)) {
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 if (deleting) "删除中" else "删除",
-                                color = if (deleting) Muted else Rose,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
+                                color = if (deleting) Muted else Rose.copy(alpha = 0.8f),
+                                fontSize = 11.sp,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(4.dp))
                                     .clickable(enabled = !deleting) { onDeleteComment(comment) }
-                                    .padding(horizontal = 3.dp, vertical = 1.dp)
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
                             )
                         }
                     }
@@ -5151,8 +4822,8 @@ private fun CommunityInteractionSummary(
             }
             post.commentCount > 0 -> {
                 Text(
-                    "显示 ${post.commentCount} 条评论",
-                    color = WechatBlue,
+                    "查看全部 ${post.commentCount} 条评论",
+                    color = Green,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.clickable(onClick = onComment)
@@ -5176,70 +4847,102 @@ private fun PublishCommunityPostDialog(
 ) {
     Dialog(onDismissRequest = { if (!posting) onDismiss() }) {
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = Color.White,
-            shape = RoundedCornerShape(18.dp),
-            shadowElevation = 16.dp
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp),
+            color = Paper,
+            shape = RoundedCornerShape(20.dp),
+            shadowElevation = 12.dp,
+            border = BorderStroke(1.dp, Line.copy(alpha = 0.5f))
         ) {
             Column(
                 modifier = Modifier
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Surface(color = Leaf, shape = RoundedCornerShape(10.dp)) {
                         Icon(
-                            Icons.Rounded.Add,
+                            Icons.Rounded.AutoAwesome,
                             contentDescription = null,
                             tint = Green,
-                            modifier = Modifier.padding(9.dp).size(20.dp)
+                            modifier = Modifier.padding(8.dp).size(20.dp)
                         )
                     }
                     Spacer(Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("发布动态", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-                        Text("文字、照片或两者都可以", color = Muted, fontSize = 12.sp)
+                        Text("分享瞬间", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("发布动态或照片到社区", color = Muted, fontSize = 11.sp)
                     }
-                    Text(
-                        "×",
-                        color = Muted,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable(enabled = !posting, onClick = onDismiss)
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
+                    IconButton(
+                        onClick = onDismiss,
+                        enabled = !posting,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Muted)
+                    }
                 }
+
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    color = WechatScreen,
-                    shape = RoundedCornerShape(12.dp)
+                    color = HallWarmSurface,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Line.copy(alpha = 0.4f))
                 ) {
                     Row(
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier.padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        CommunityAvatar(name = user.displayName.ifBlank { user.username }, avatarUrl = user.avatarUrl, size = 42.dp)
+                        CommunityAvatar(name = user.displayName.ifBlank { user.username }, avatarUrl = user.avatarUrl, size = 36.dp)
                         Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(user.displayName.ifBlank { user.username }, color = Ink, fontWeight = FontWeight.ExtraBold)
-                            Text("发布到人文社区", color = Muted, fontSize = 12.sp)
+                            Text(
+                                user.displayName.ifBlank { user.username },
+                                color = Ink,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Text("发布到人文社区", color = Muted, fontSize = 11.sp)
                         }
-                        Surface(color = Color.White, shape = RoundedCornerShape(8.dp)) {
-                            Text("公开", color = WechatBlue, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                        Surface(
+                            color = Leaf,
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                "公开",
+                                color = Green,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
                         }
                     }
                 }
+
                 OutlinedTextField(
                     value = draft,
                     onValueChange = onDraftChange,
-                    modifier = Modifier.fillMaxWidth().height(142.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(130.dp),
                     shape = RoundedCornerShape(12.dp),
-                    placeholder = { Text("写点想分享的内容，也可以只发照片") },
+                    placeholder = { Text("记录近况、故事，或是寻求帮助...", fontSize = 14.sp) },
                     colors = warmTextFieldColors()
                 )
+
+                if (imageUris.isNotEmpty()) {
+                    CommunityImageGrid(
+                        imageUrls = imageUris,
+                        removable = true,
+                        onRemove = onRemoveImage,
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                    )
+                }
+
                 OutlinedButton(
                     onClick = onAddImages,
                     enabled = imageUris.size < 9 && !posting,
@@ -5248,40 +4951,42 @@ private fun PublishCommunityPostDialog(
                     border = BorderStroke(1.dp, Line),
                     colors = quietOutlinedButtonColors()
                 ) {
-                    Icon(Icons.Rounded.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp), tint = Green)
                     Spacer(Modifier.width(8.dp))
-                    Text(if (imageUris.isEmpty()) "添加照片" else "继续添加 ${imageUris.size}/9")
-                }
-                if (imageUris.isNotEmpty()) {
-                    CommunityImageGrid(
-                        imageUrls = imageUris,
-                        removable = true,
-                        onRemove = onRemoveImage
+                    Text(
+                        if (imageUris.isEmpty()) "添加照片" else "继续添加 (${imageUris.size}/9)",
+                        color = Ink,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Text("${draft.length}/500", color = Muted, fontSize = 12.sp)
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = onDismiss, enabled = !posting, shape = RoundedCornerShape(10.dp)) {
-                        Text("取消", color = Green, fontWeight = FontWeight.Bold)
+                    TextButton(onClick = onDismiss, enabled = !posting) {
+                        Text("取消", color = Muted, fontWeight = FontWeight.Medium)
                     }
                     Spacer(Modifier.width(8.dp))
                     Button(
                         onClick = onPublish,
                         enabled = !posting && (draft.isNotBlank() || imageUris.isNotEmpty()),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = WechatGreen,
+                            containerColor = Green,
                             contentColor = Color.White,
-                            disabledContainerColor = WechatDivider,
+                            disabledContainerColor = Line,
                             disabledContentColor = Muted
                         ),
                         shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
                     ) {
                         if (posting) {
-                            CircularProgressIndicator(modifier = Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                         } else {
-                            Text("发布", fontWeight = FontWeight.Bold)
+                            Text("发布", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
                     }
                 }
@@ -5322,66 +5027,86 @@ private fun CommunityVolunteerDialog(
             }
         }.thenByDescending { it.createdAt }
     )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Night.copy(alpha = 0.28f))
-            .padding(horizontal = 13.dp, vertical = 18.dp),
-        contentAlignment = Alignment.TopCenter
+            .background(Night.copy(alpha = 0.4f))
+            .padding(horizontal = 14.dp, vertical = 20.dp),
+        contentAlignment = Alignment.Center
     ) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.92f)
-                .clickable(onClick = {}),
-            color = Background.copy(alpha = 0.96f),
-            shape = RoundedCornerShape(28.dp),
-            shadowElevation = 14.dp,
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.78f))
+                .fillMaxHeight(0.95f),
+            color = HallWarmBackground,
+            shape = RoundedCornerShape(24.dp),
+            shadowElevation = 16.dp,
+            border = BorderStroke(1.dp, Line.copy(alpha = 0.5f))
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     if (selectedVolunteer != null) {
-                        TextButton(onClick = onBackToList) {
-                            Text("返回", color = Green, fontWeight = FontWeight.Bold)
+                        TextButton(
+                            onClick = onBackToList,
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text("← 返回", color = Green, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         }
-                        Spacer(Modifier.width(4.dp))
+                        Spacer(Modifier.width(8.dp))
                     }
+
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("义工招募", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
                         Text(
-                            if (selectedVolunteer == null) "点击卡片查看详情与报名入口" else "项目详情与报名入口",
+                            "社区义工招募",
+                            color = Ink,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            if (selectedVolunteer == null) "参与社区建设与互助服务" else "义工详情",
                             color = Muted,
-                            fontSize = 12.sp
+                            fontSize = 11.sp
                         )
                     }
-                    Text(
-                        "×",
-                        color = Ink,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable(onClick = onDismiss)
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
+
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Ink)
+                    }
                 }
 
                 if (selectedVolunteer == null) {
                     LazyColumn(
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                        contentPadding = PaddingValues(bottom = 8.dp)
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        contentPadding = PaddingValues(bottom = 12.dp)
                     ) {
                         items(volunteers, key = { it.id }) { item ->
                             CommunityVolunteerImageCard(
                                 item = item,
-                                actionLabel = if (isAdmin) "详情" else "报名",
+                                actionLabel = if (isAdmin) "管理详情" else "立即报名",
                                 onClick = { onSelectVolunteer(item) }
                             )
                         }
                         if (isAdmin) {
                             item {
+                                Spacer(Modifier.height(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(1.dp)
+                                        .background(Line.copy(alpha = 0.5f))
+                                )
+                                Spacer(Modifier.height(8.dp))
                                 CommunityVolunteerAdminPanel(
                                     title = title,
                                     body = body,
@@ -5396,7 +5121,14 @@ private fun CommunityVolunteerDialog(
                                     onContactChange = { contact = it.take(160) },
                                     onPickCover = onPickCover,
                                     onClearCover = onClearCover,
-                                    onPublish = { onPublish(title, body, contact, coverUri) },
+                                    onPublish = {
+                                        onPublish(title, body, contact, coverUri)
+                                        if (!posting) {
+                                            title = ""
+                                            body = ""
+                                            contact = ""
+                                        }
+                                    },
                                     onRefreshApplications = onRefreshApplications,
                                     onReview = onReview
                                 )
@@ -5425,8 +5157,9 @@ private fun CommunityVolunteerImageCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(178.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .height(180.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)), RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
     ) {
         CommunityVolunteerCoverImage(imageUrl = item.imageUrl, title = item.title)
@@ -5437,40 +5170,63 @@ private fun CommunityVolunteerImageCard(
                     Brush.verticalGradient(
                         listOf(
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.18f),
-                            Color.Black.copy(alpha = 0.42f)
+                            Night.copy(alpha = 0.2f),
+                            Night.copy(alpha = 0.65f)
                         )
                     )
                 )
         )
         Column(
             modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 20.dp, end = 116.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .align(Alignment.BottomStart)
+                .padding(16.dp)
+                .padding(end = 110.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(item.title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("领队：安忆社区", color = Color.White.copy(alpha = 0.90f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.CalendarMonth, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(formatVolunteerDate(item.createdAt), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(
+                item.title,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    Icons.Rounded.CalendarMonth,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.8f),
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    formatVolunteerDate(item.createdAt),
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 11.sp
+                )
+                Text(
+                    "· 领队: 安忆",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 11.sp
+                )
             }
         }
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp),
-            color = Color.White,
-            shape = RoundedCornerShape(22.dp),
+            color = Paper,
+            shape = RoundedCornerShape(12.dp),
             shadowElevation = 4.dp
         ) {
             Text(
                 actionLabel,
-                color = Ink,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 16.sp,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)
+                color = Green,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
         }
     }
@@ -5485,62 +5241,101 @@ private fun CommunityVolunteerDetailPanel(
 ) {
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(210.dp)
-                .clip(RoundedCornerShape(24.dp))
+                .height(200.dp)
+                .clip(RoundedCornerShape(16.dp))
         ) {
             CommunityVolunteerCoverImage(imageUrl = item.imageUrl, title = item.title)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.48f))))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Transparent,
+                                Night.copy(alpha = 0.6f)
+                            )
+                        )
+                    )
             )
             Text(
                 item.title,
                 color = Color.White,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.ExtraBold,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(18.dp)
+                    .padding(16.dp)
             )
         }
+
         Surface(
-            color = Color.White.copy(alpha = 0.94f),
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, Line.copy(alpha = 0.55f))
+            color = Paper,
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Line.copy(alpha = 0.5f))
         ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SectionTitle("详细介绍", "了解项目内容后再报名")
-                Text(item.body, color = Ink, fontSize = 14.sp, lineHeight = 22.sp)
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    "项目介绍",
+                    color = Ink,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    item.body,
+                    color = Ink,
+                    fontSize = 14.sp,
+                    lineHeight = 22.sp
+                )
+
                 if (item.contact.isNotBlank()) {
                     Surface(
-                        color = Leaf.copy(alpha = 0.82f),
-                        shape = RoundedCornerShape(14.dp)
+                        color = Leaf.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Line.copy(alpha = 0.3f))
                     ) {
-                        Text(
-                            item.contact,
-                            color = Green,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(12.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Rounded.Person,
+                                contentDescription = null,
+                                tint = Green,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "联系方式: ${item.contact}",
+                                color = Green,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
+
                 if (!isAdmin) {
                     Button(
                         onClick = onApply,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5EA0EE), contentColor = Color.White)
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Green,
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(vertical = 12.dp)
                     ) {
-                        Text("我要报名", fontWeight = FontWeight.ExtraBold)
+                        Text("我要报名参与", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
             }
@@ -5567,119 +5362,171 @@ private fun CommunityVolunteerAdminPanel(
     onRefreshApplications: () -> Unit,
     onReview: (CommunityVolunteerApplication, String) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle("发布招募", "管理员添加照片后会显示在义工卡片上")
+    Column(
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            "发布新招募",
+            color = Ink,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
+
         Surface(
-            color = Color.White.copy(alpha = 0.92f),
-            shape = RoundedCornerShape(18.dp),
-            border = BorderStroke(1.dp, Line.copy(alpha = 0.55f))
+            color = Paper,
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, Line.copy(alpha = 0.5f))
         ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 if (coverUri != null) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(138.dp)
-                            .clip(RoundedCornerShape(16.dp))
+                            .height(140.dp)
+                            .clip(RoundedCornerShape(12.dp))
                     ) {
                         CommunityVolunteerCoverImage(imageUrl = coverUri, title = title)
                         Surface(
-                            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                            color = Ink.copy(alpha = 0.68f),
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(8.dp),
+                            color = Night.copy(alpha = 0.6f),
                             shape = CircleShape
                         ) {
-                            Text(
-                                "×",
-                                color = Color.White,
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
+                            Box(
                                 modifier = Modifier
-                                    .clickable(onClick = onClearCover)
-                                    .padding(horizontal = 9.dp, vertical = 3.dp)
-                            )
+                                    .size(24.dp)
+                                    .clickable(onClick = onClearCover),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Close,
+                                    contentDescription = "清除照片",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                     }
                 }
+
                 OutlinedButton(
                     onClick = onPickCover,
                     enabled = !posting,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.dp, Line),
                     colors = quietOutlinedButtonColors()
                 ) {
-                    Icon(Icons.Rounded.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp), tint = Green)
                     Spacer(Modifier.width(8.dp))
-                    Text(if (coverUri == null) "添加卡片照片" else "更换卡片照片")
+                    Text(
+                        if (coverUri == null) "添加卡片封面" else "更换卡片封面",
+                        color = Ink,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
+
                 OutlinedTextField(
                     value = title,
                     onValueChange = onTitleChange,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(8.dp),
-                    label = { Text("标题") },
+                    placeholder = { Text("招募项目标题") },
                     colors = warmTextFieldColors()
                 )
+
                 OutlinedTextField(
                     value = body,
                     onValueChange = onBodyChange,
-                    modifier = Modifier.fillMaxWidth().height(104.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp),
                     shape = RoundedCornerShape(8.dp),
-                    label = { Text("招募内容") },
+                    placeholder = { Text("招募详情介绍...") },
                     colors = warmTextFieldColors()
                 )
+
                 OutlinedTextField(
                     value = contact,
                     onValueChange = onContactChange,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = RoundedCornerShape(8.dp),
-                    label = { Text("联系方式") },
+                    placeholder = { Text("联系方式 (微信/电话)") },
                     colors = warmTextFieldColors()
                 )
+
                 Button(
                     onClick = onPublish,
                     enabled = !posting && title.isNotBlank() && body.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = primaryButtonColors()
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Green,
+                        contentColor = Color.White,
+                        disabledContainerColor = Line,
+                        disabledContentColor = Muted
+                    ),
+                    contentPadding = PaddingValues(vertical = 12.dp)
                 ) {
                     if (posting) {
-                        CircularProgressIndicator(modifier = Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                     } else {
-                        Text("发布义工信息")
+                        Text("确认发布招募", fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
 
-        SectionTitle("报名审核", "管理员审核后再联系报名用户")
-        OutlinedButton(
-            onClick = onRefreshApplications,
-            enabled = !applicationsLoading,
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, Line),
-            colors = quietOutlinedButtonColors()
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            if (applicationsLoading) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Green)
-            } else {
-                Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(17.dp))
+            Text(
+                "报名审核",
+                color = Ink,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            IconButton(
+                onClick = onRefreshApplications,
+                enabled = !applicationsLoading,
+                modifier = Modifier.size(36.dp)
+            ) {
+                if (applicationsLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Green)
+                } else {
+                    Icon(Icons.Rounded.Refresh, contentDescription = "刷新", tint = Green)
+                }
             }
-            Spacer(Modifier.width(8.dp))
-            Text(if (applicationsLoading) "正在刷新" else "刷新报名列表")
         }
+
         if (!applicationsLoading && applications.isEmpty()) {
             Surface(
-                color = Color.White.copy(alpha = 0.78f),
-                shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.dp, Line.copy(alpha = 0.50f))
+                modifier = Modifier.fillMaxWidth(),
+                color = Paper,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, Line.copy(alpha = 0.5f))
             ) {
-                Text("暂时还没有报名申请", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
+                Text(
+                    "暂无报名申请",
+                    color = Muted,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(16.dp),
+                    textAlign = TextAlign.Center
+                )
             }
         }
+
         applications.forEach { application ->
             CommunityVolunteerApplicationReviewCard(
                 application = application,
@@ -5710,7 +5557,7 @@ private fun CommunityVolunteerCoverImage(imageUrl: String?, title: String) {
         } else {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Rounded.LocalFlorist, contentDescription = null, tint = Color.White.copy(alpha = 0.70f), modifier = Modifier.size(34.dp))
-                Text("等待管理员添加照片", color = Color.White.copy(alpha = 0.86f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("等待上传义工照片", color = Color.White.copy(alpha = 0.86f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -5745,58 +5592,58 @@ private fun CommunityVolunteerApplicationDialog(
     var note by rememberSaveable { mutableStateOf("") }
     Dialog(onDismissRequest = { if (!applying) onDismiss() }) {
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = Color.White,
-            shape = RoundedCornerShape(18.dp),
-            shadowElevation = 16.dp
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp),
+            color = Paper,
+            shape = RoundedCornerShape(20.dp),
+            shadowElevation = 12.dp,
+            border = BorderStroke(1.dp, Line.copy(alpha = 0.5f))
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Surface(color = Leaf, shape = RoundedCornerShape(10.dp)) {
                         Icon(
                             Icons.Rounded.Person,
                             contentDescription = null,
                             tint = Green,
-                            modifier = Modifier.padding(9.dp).size(20.dp)
+                            modifier = Modifier.padding(8.dp).size(20.dp)
                         )
                     }
                     Spacer(Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("义工报名", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-                        Text("留下联系方式，管理员会与你确认", color = Muted, fontSize = 12.sp)
+                        Text("义工报名", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("请填写联系信息以便领队与您确认", color = Muted, fontSize = 11.sp)
                     }
-                    Text(
-                        "×",
-                        color = Muted,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable(enabled = !applying, onClick = onDismiss)
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
+                    IconButton(
+                        onClick = onDismiss,
+                        enabled = !applying,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Muted)
+                    }
                 }
 
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     color = HallWarmSurface,
                     shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, Line.copy(alpha = 0.55f))
+                    border = BorderStroke(1.dp, Line.copy(alpha = 0.4f))
                 ) {
-                    Column(modifier = Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("报名项目", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        Text(volunteer.title, color = Ink, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
-                        Text(
-                            volunteer.body,
-                            color = Muted,
-                            fontSize = 12.sp,
-                            lineHeight = 18.sp,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("报名项目", color = Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(volunteer.title, color = Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
 
@@ -5805,9 +5652,8 @@ private fun CommunityVolunteerApplicationDialog(
                     onValueChange = { name = it.take(40) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    placeholder = { Text("姓名") },
-                    leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null) },
+                    shape = RoundedCornerShape(8.dp),
+                    placeholder = { Text("您的姓名") },
                     colors = warmTextFieldColors()
                 )
                 OutlinedTextField(
@@ -5815,27 +5661,28 @@ private fun CommunityVolunteerApplicationDialog(
                     onValueChange = { phone = it.take(40) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    placeholder = { Text("联系方式") },
+                    shape = RoundedCornerShape(8.dp),
+                    placeholder = { Text("联系电话") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     colors = warmTextFieldColors()
                 )
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it.take(500) },
-                    modifier = Modifier.fillMaxWidth().height(112.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    placeholder = { Text("报名说明：可参与时间、擅长事项等") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(90.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    placeholder = { Text("备注说明（例如可参与时间、相关特长等）") },
                     colors = warmTextFieldColors()
                 )
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(
-                        onClick = onDismiss,
-                        enabled = !applying,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("取消", color = Green, fontWeight = FontWeight.Bold)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    TextButton(onClick = onDismiss, enabled = !applying) {
+                        Text("取消", color = Muted, fontWeight = FontWeight.Medium)
                     }
                     Spacer(Modifier.weight(1f))
                     Button(
@@ -5844,16 +5691,16 @@ private fun CommunityVolunteerApplicationDialog(
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Green,
                             contentColor = Color.White,
-                            disabledContainerColor = WechatDivider,
+                            disabledContainerColor = Line,
                             disabledContentColor = Muted
                         ),
                         shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
                     ) {
                         if (applying) {
-                            CircularProgressIndicator(modifier = Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                         } else {
-                            Text("提交报名", fontWeight = FontWeight.Bold)
+                            Text("确认报名", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
                     }
                 }
@@ -5871,45 +5718,90 @@ private fun CommunityVolunteerApplicationReviewCard(
 ) {
     val statusColor = volunteerApplicationStatusColor(application.status)
     Surface(
-        color = Color.White.copy(alpha = 0.82f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, statusColor.copy(alpha = 0.30f))
+        color = Paper,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, statusColor.copy(alpha = 0.3f)),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 CommunityAvatar(
                     name = application.applicantName.ifBlank { application.name },
                     avatarUrl = application.applicantAvatarUrl,
-                    size = 34.dp
+                    size = 36.dp
                 )
-                Spacer(Modifier.width(9.dp))
+                Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(application.name, color = Ink, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
-                    Text(application.volunteerTitle, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        application.name,
+                        color = Ink,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        application.volunteerTitle,
+                        color = Muted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
                 Surface(
-                    color = statusColor.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, statusColor.copy(alpha = 0.22f))
+                    color = statusColor.copy(alpha = 0.1f),
+                    shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
                         volunteerApplicationStatusText(application.status),
                         color = statusColor,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
-            Text("联系方式：${application.phone}", color = Green, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Line.copy(alpha = 0.3f))
+            )
+
+            Text(
+                "联系方式: ${application.phone}",
+                color = Green,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+
             if (application.note.isNotBlank()) {
-                Text(application.note, color = Ink, fontSize = 13.sp, lineHeight = 19.sp)
+                Text(
+                    application.note,
+                    color = Ink,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
             }
+
             if (application.createdAt > 0L) {
-                Text(formatTime(application.createdAt), color = Muted, fontSize = 11.sp)
+                Text(
+                    "申请时间: " + formatTime(application.createdAt),
+                    color = Muted,
+                    fontSize = 11.sp
+                )
             }
+
             if (application.status == "pending") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     OutlinedButton(
                         onClick = onReject,
                         enabled = !busy,
@@ -5918,16 +5810,19 @@ private fun CommunityVolunteerApplicationReviewCard(
                         border = BorderStroke(1.dp, Line),
                         colors = quietOutlinedButtonColors()
                     ) {
-                        Text("拒绝")
+                        Text("拒绝", fontSize = 13.sp)
                     }
                     Button(
                         onClick = onApprove,
                         enabled = !busy,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp),
-                        colors = primaryButtonColors()
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Green,
+                            contentColor = Color.White
+                        )
                     ) {
-                        Text(if (busy) "处理中" else "通过")
+                        Text(if (busy) "处理中" else "通过", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -5962,12 +5857,12 @@ private fun CommunityHero(
     val totalLikes = posts.sumOf { it.likeCount }
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = Paper.copy(alpha = 0.74f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.62f)),
-        shadowElevation = 2.dp
+        color = Paper,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.5f)),
+        shadowElevation = 1.dp
     ) {
-        Box(modifier = Modifier.height(178.dp)) {
+        Box(modifier = Modifier.height(180.dp)) {
             ComposeImage(
                 painter = painterResource(id = R.drawable.anyi_hall_page_bg),
                 contentDescription = null,
@@ -5980,10 +5875,9 @@ private fun CommunityHero(
                     .background(
                         Brush.linearGradient(
                             listOf(
-                                Night.copy(alpha = 0.44f),
-                                Green.copy(alpha = 0.30f),
-                                Amber.copy(alpha = 0.18f),
-                                Paper.copy(alpha = 0.16f)
+                                Night.copy(alpha = 0.5f),
+                                Green.copy(alpha = 0.3f),
+                                Paper.copy(alpha = 0.1f)
                             )
                         )
                     )
@@ -5994,26 +5888,34 @@ private fun CommunityHero(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Surface(
-                        color = Color.White.copy(alpha = 0.22f),
+                        color = Color.White.copy(alpha = 0.2f),
                         shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.38f))
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.3f))
                     ) {
                         Icon(
                             Icons.AutoMirrored.Rounded.Article,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.padding(9.dp).size(22.dp)
+                            modifier = Modifier.padding(8.dp).size(20.dp)
                         )
                     }
                     Spacer(Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("人文社区", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                        Text(
+                            "人文社区",
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                         Text(
                             "把近况、故事和互助放在同一个温暖的地方",
-                            color = Color.White.copy(alpha = 0.86f),
-                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -6022,38 +5924,54 @@ private fun CommunityHero(
                         onClick = onRefresh,
                         enabled = !loading,
                         shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = Color.White.copy(alpha = 0.12f),
-                            contentColor = Color.White,
-                            disabledContentColor = Color.White.copy(alpha = 0.54f)
-                        )
+                            containerColor = Color.White.copy(alpha = 0.15f),
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text(if (loading) "同步" else "刷新", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Icon(
+                            Icons.Rounded.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = Color.White
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            if (loading) "同步中" else "刷新",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Bottom,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     CommunityStatPill("动态", posts.size.toString(), Icons.AutoMirrored.Rounded.Article, Modifier.weight(1f))
                     CommunityStatPill("点赞", totalLikes.toString(), Icons.Rounded.Favorite, Modifier.weight(1f))
                     Surface(
                         modifier = Modifier.weight(1f),
-                        color = Color.White.copy(alpha = 0.78f),
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.58f))
+                        color = Color.White.copy(alpha = 0.9f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, Color.White)
                     ) {
                         Row(
-                            modifier = Modifier.clickable(onClick = onVolunteer).padding(horizontal = 10.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier
+                                .clickable(onClick = onVolunteer)
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
-                            Icon(Icons.Rounded.Favorite, contentDescription = null, tint = Rose, modifier = Modifier.size(17.dp))
+                            Icon(Icons.Rounded.Favorite, contentDescription = null, tint = Rose, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Column {
-                                Text("义工", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                                Text("招募", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                                Text("义工", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                Text("招募", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -6067,19 +5985,20 @@ private fun CommunityHero(
 private fun CommunityStatPill(label: String, value: String, icon: ImageVector, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
-        color = Color.White.copy(alpha = 0.78f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.58f))
+        color = Color.White.copy(alpha = 0.9f),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, Color.White)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
         ) {
-            Icon(icon, contentDescription = null, tint = Green, modifier = Modifier.size(17.dp))
+            Icon(icon, contentDescription = null, tint = Green, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
             Column {
-                Text(label, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                Text(value, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+                Text(label, color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                Text(value, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -6095,36 +6014,58 @@ private fun CommunityComposer(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = Paper.copy(alpha = 0.92f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.72f)),
-        shadowElevation = 3.dp
+        color = Paper,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.5f)),
+        shadowElevation = 2.dp
     ) {
-        Column(modifier = Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CommunityAvatar(
                     name = user.displayName.ifBlank { user.username },
                     avatarUrl = user.avatarUrl,
-                    size = 42.dp
+                    size = 38.dp
                 )
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(user.displayName.ifBlank { user.username }, color = Ink, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
-                    Text("把这一刻留给社区", color = Muted, fontSize = 12.sp)
+                    Text(
+                        user.displayName.ifBlank { user.username },
+                        color = Ink,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text("发布到人文社区", color = Muted, fontSize = 11.sp)
                 }
-                Surface(color = Leaf.copy(alpha = 0.82f), shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, Line.copy(alpha = 0.42f))) {
-                    Text("公开", color = Green, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp))
+                Surface(
+                    color = Leaf,
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        "公开",
+                        color = Green,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
             OutlinedTextField(
                 value = draft,
                 onValueChange = { onDraftChange(it.take(500)) },
-                modifier = Modifier.fillMaxWidth().height(116.dp),
-                shape = RoundedCornerShape(8.dp),
-                placeholder = { Text("这一刻，想和大家聊点什么？") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(100.dp),
+                shape = RoundedCornerShape(10.dp),
+                placeholder = { Text("这一刻，想和大家分享些什么？", fontSize = 14.sp) },
                 colors = warmTextFieldColors()
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     CommunityTopicChip("近况")
                     CommunityTopicChip("故事")
@@ -6136,15 +6077,23 @@ private fun CommunityComposer(
                 Button(
                     onClick = onPublish,
                     enabled = draft.isNotBlank() && !posting,
-                    shape = RoundedCornerShape(8.dp),
-                    colors = primaryButtonColors()
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Green,
+                        contentColor = Color.White
+                    ),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     if (posting) {
-                        CircularProgressIndicator(modifier = Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                     } else {
-                        Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("发布")
+                        Icon(
+                            Icons.AutoMirrored.Rounded.Send,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("发布", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -6155,13 +6104,13 @@ private fun CommunityComposer(
 @Composable
 private fun CommunityTopicChip(text: String) {
     Surface(
-        color = Blush.copy(alpha = 0.74f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Line.copy(alpha = 0.36f))
+        color = Blush.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.3f))
     ) {
         Text(
             text,
-            color = Muted,
+            color = Rose,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -6173,34 +6122,54 @@ private fun CommunityTopicChip(text: String) {
 private fun VolunteerRecruitmentEntry(onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = Color.White.copy(alpha = 0.86f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.70f)),
-        shadowElevation = 2.dp
+        color = Paper,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.5f)),
+        shadowElevation = 1.dp
     ) {
         Row(
             modifier = Modifier
                 .clickable(onClick = onClick)
-                .background(Brush.linearGradient(listOf(Leaf.copy(alpha = 0.72f), Blush.copy(alpha = 0.48f), Color.White.copy(alpha = 0.32f))))
-                .padding(horizontal = 13.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .background(Brush.linearGradient(listOf(Leaf.copy(alpha = 0.3f), Blush.copy(alpha = 0.2f))))
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Surface(color = Paper.copy(alpha = 0.92f), shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, Line.copy(alpha = 0.46f))) {
-                Icon(Icons.Rounded.Favorite, contentDescription = null, tint = Rose, modifier = Modifier.padding(8.dp).size(18.dp))
+            Surface(
+                color = Rose.copy(alpha = 0.1f),
+                shape = CircleShape,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Rounded.Favorite,
+                        contentDescription = null,
+                        tint = Rose,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
-            Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("招募社区义工", color = Ink, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
-                Text("陪伴、整理故事、线下互助", color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    "招募社区义工",
+                    color = Ink,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Text(
+                    "陪伴、整理故事、线下互助",
+                    color = Muted,
+                    fontSize = 12.sp
+                )
             }
             OutlinedButton(
                 onClick = onClick,
                 shape = RoundedCornerShape(8.dp),
-                border = BorderStroke(1.dp, Green.copy(alpha = 0.32f)),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
-                colors = quietOutlinedButtonColors()
+                border = BorderStroke(1.dp, Green.copy(alpha = 0.4f)),
+                colors = quietOutlinedButtonColors(),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
             ) {
-                Text("查看", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("查看招募", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Green)
             }
         }
     }
@@ -6215,132 +6184,177 @@ private fun CommunityPostCard(
     commentInputVisible: Boolean,
     commentPosting: Boolean,
     canDeletePost: Boolean,
+    canReportPost: Boolean,
     deletingPost: Boolean,
     canDeleteComment: (CommunityComment) -> Boolean,
     deletingCommentId: String?,
     onLike: () -> Unit,
     onComment: () -> Unit,
+    onReportPost: () -> Unit,
     onDeletePost: () -> Unit,
     onDeleteComment: (CommunityComment) -> Unit,
     onCommentDraftChange: (String) -> Unit,
     onSubmitComment: () -> Unit
 ) {
-    Column(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        color = Paper,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.5f)),
+        shadowElevation = 0.5.dp
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.Top
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            CommunityAvatar(name = post.authorName, avatarUrl = post.authorAvatarUrl, size = 42.dp)
-            Spacer(Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text(
-                    post.authorName,
-                    color = WechatBlue,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (post.content.isNotBlank()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CommunityAvatar(name = post.authorName, avatarUrl = post.authorAvatarUrl, size = 40.dp)
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        post.content,
+                        post.authorName,
                         color = Ink,
-                        fontSize = 15.sp,
-                        lineHeight = 22.sp
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                }
-                if (post.imageUrls.isNotEmpty()) {
-                    CommunityImageGrid(imageUrls = post.imageUrls)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(formatTime(post.createdAt), color = Muted, fontSize = 12.sp)
-                    Spacer(Modifier.weight(1f))
-                    CommunityInlineAction(
-                        icon = if (post.likedByMe) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                        text = if (post.likeCount > 0) "${post.likeCount}" else "赞",
-                        tint = if (post.likedByMe) Rose else WechatBlue,
-                        onClick = onLike
+                    Text(
+                        formatTime(post.createdAt),
+                        color = Muted,
+                        fontSize = 11.sp
                     )
-                    Spacer(Modifier.width(4.dp))
-                    CommunityInlineAction(
-                        icon = Icons.Rounded.ChatBubble,
-                        text = if (post.commentCount > 0) "${post.commentCount}" else "评论",
-                        tint = WechatBlue,
-                        onClick = onComment
-                    )
-                    if (canDeletePost) {
-                        Spacer(Modifier.width(4.dp))
-                        CommunityInlineAction(
-                            icon = Icons.Rounded.Delete,
-                            text = if (deletingPost) "删除中" else "删除",
-                            tint = Rose,
-                            enabled = !deletingPost,
-                            onClick = onDeletePost
+                    if (post.moderationStatus != "approved") {
+                        Text(
+                            if (post.moderationStatus == "pending") "审核中" else "已隐藏",
+                            color = if (post.moderationStatus == "pending") Amber else Rose,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
-                CommunityInteractionSummary(
-                    post = post,
-                    comments = comments,
-                    commentsLoading = commentsLoading,
-                    canDeleteComment = canDeleteComment,
-                    deletingCommentId = deletingCommentId,
-                    onDeleteComment = onDeleteComment,
-                    onComment = onComment
-                )
-                if (commentInputVisible) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(WechatComment, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 8.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                if (canReportPost) {
+                    IconButton(
+                        onClick = onReportPost,
+                        modifier = Modifier.size(32.dp)
                     ) {
-                        OutlinedTextField(
-                            value = commentDraft,
-                            onValueChange = onCommentDraftChange,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp),
-                            singleLine = true,
-                            shape = RoundedCornerShape(8.dp),
-                            placeholder = { Text("写评论", fontSize = 13.sp) },
-                            colors = warmTextFieldColors()
+                        Icon(
+                            imageVector = Icons.Rounded.Flag,
+                            contentDescription = "举报",
+                            tint = Muted,
+                            modifier = Modifier.size(17.dp)
                         )
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick = onSubmitComment,
-                            enabled = !commentPosting && commentDraft.isNotBlank(),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = WechatGreen,
-                                contentColor = Color.White,
-                                disabledContainerColor = WechatDivider,
-                                disabledContentColor = Muted
-                            ),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            if (commentPosting) {
-                                CircularProgressIndicator(modifier = Modifier.size(15.dp), color = Color.White, strokeWidth = 2.dp)
-                            } else {
-                                Text("发送", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
+                    }
+                }
+                if (canDeletePost) {
+                    IconButton(
+                        onClick = onDeletePost,
+                        enabled = !deletingPost,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Delete,
+                            contentDescription = "删除",
+                            tint = Rose.copy(alpha = 0.8f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+
+            if (post.content.isNotBlank()) {
+                Text(
+                    post.content,
+                    color = Ink,
+                    fontSize = 14.sp,
+                    lineHeight = 21.sp
+                )
+            }
+
+            if (post.imageUrls.isNotEmpty()) {
+                CommunityImageGrid(
+                    imageUrls = post.imageUrls,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End
+            ) {
+                CommunityInlineAction(
+                    icon = if (post.likedByMe) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                    text = if (post.likeCount > 0) "${post.likeCount}" else "觉得有帮助",
+                    tint = if (post.likedByMe) Rose else Green,
+                    onClick = onLike
+                )
+                Spacer(Modifier.width(16.dp))
+                CommunityInlineAction(
+                    icon = Icons.Rounded.ChatBubble,
+                    text = if (post.commentCount > 0) "${post.commentCount}" else "评论",
+                    tint = Green,
+                    onClick = onComment
+                )
+            }
+
+            CommunityInteractionSummary(
+                post = post,
+                comments = comments,
+                commentsLoading = commentsLoading,
+                canDeleteComment = canDeleteComment,
+                deletingCommentId = deletingCommentId,
+                onDeleteComment = onDeleteComment,
+                onComment = onComment
+            )
+
+            if (commentInputVisible) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(HallWarmSurface, RoundedCornerShape(12.dp))
+                        .border(BorderStroke(1.dp, Line.copy(alpha = 0.4f)), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = commentDraft,
+                        onValueChange = onCommentDraftChange,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                        placeholder = { Text("写评论...", fontSize = 13.sp) },
+                        colors = warmTextFieldColors()
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = onSubmitComment,
+                        enabled = !commentPosting && commentDraft.isNotBlank(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Green,
+                            contentColor = Color.White,
+                            disabledContainerColor = Line,
+                            disabledContentColor = Muted
+                        ),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        if (commentPosting) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), color = Color.White, strokeWidth = 2.dp)
+                        } else {
+                            Text("发送", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
         }
-        Box(
-            modifier = Modifier
-                .padding(start = 66.dp)
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(WechatDivider)
-        )
     }
 }
 
@@ -6352,20 +6366,36 @@ private fun CommunityImageGrid(
     onRemove: (String) -> Unit = {}
 ) {
     if (imageUrls.isEmpty()) return
-    val rows = imageUrls.chunked(3)
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        rows.forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                row.forEach { url ->
-                    CommunityImageTile(
-                        imageUrl = url,
-                        removable = removable,
-                        onRemove = { onRemove(url) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                repeat(3 - row.size) {
-                    Spacer(modifier = Modifier.weight(1f))
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (imageUrls.size == 1) {
+            val url = imageUrls.first()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.7f)
+                    .aspectRatio(1.33f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFFF7F5F0))
+            ) {
+                CommunityImageTileContent(imageUrl = url, removable = removable, onRemove = { onRemove(url) })
+            }
+        } else {
+            val rows = imageUrls.chunked(3)
+            rows.forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    row.forEach { url ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFF7F5F0))
+                        ) {
+                            CommunityImageTileContent(imageUrl = url, removable = removable, onRemove = { onRemove(url) })
+                        }
+                    }
+                    repeat(3 - row.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
                 }
             }
         }
@@ -6379,12 +6409,26 @@ private fun CommunityImageTile(
     onRemove: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val bitmap by rememberUriImage(imageUrl)
     Box(
         modifier = modifier
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(3.dp))
-            .background(Color(0xFFEFEFEF)),
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFFF7F5F0)),
+        contentAlignment = Alignment.Center
+    ) {
+        CommunityImageTileContent(imageUrl = imageUrl, removable = removable, onRemove = onRemove)
+    }
+}
+
+@Composable
+private fun CommunityImageTileContent(
+    imageUrl: String,
+    removable: Boolean,
+    onRemove: () -> Unit
+) {
+    val bitmap by rememberUriImage(imageUrl)
+    Box(
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
         if (bitmap != null) {
@@ -6399,19 +6443,25 @@ private fun CommunityImageTile(
         }
         if (removable) {
             Surface(
-                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
-                color = Ink.copy(alpha = 0.72f),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp),
+                color = Night.copy(alpha = 0.6f),
                 shape = CircleShape
             ) {
-                Text(
-                    "×",
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                Box(
                     modifier = Modifier
-                        .clickable(onClick = onRemove)
-                        .padding(horizontal = 7.dp, vertical = 2.dp)
-                )
+                        .size(22.dp)
+                        .clickable(onClick = onRemove),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "删除",
+                        tint = Color.White,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }
@@ -6425,13 +6475,13 @@ private fun CommunityAvatar(
     size: androidx.compose.ui.unit.Dp = 38.dp
 ) {
     val initial = name.trim().firstOrNull()?.toString() ?: "人"
-    val avatarShape = RoundedCornerShape(6.dp)
+    val avatarShape = CircleShape
     Box(
         modifier = modifier
             .size(size)
             .clip(avatarShape)
             .background(Brush.linearGradient(listOf(Color.White, Leaf, Blush)))
-            .border(1.dp, Color.White.copy(alpha = 0.78f), avatarShape),
+            .border(1.dp, Line.copy(alpha = 0.5f), avatarShape),
         contentAlignment = Alignment.Center
     ) {
         val avatarState = rememberUriImage(avatarUrl)
@@ -6444,45 +6494,43 @@ private fun CommunityAvatar(
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            Text(initial, color = Green, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+            Text(initial, color = Green, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.4).sp)
         }
     }
 }
 
 @Composable
 private fun EmptyCommunityFeed() {
-    Column(modifier = Modifier.fillMaxWidth().background(Color.White)) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 16.dp),
+        color = Paper,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.5f))
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Surface(color = WechatComment, shape = RoundedCornerShape(6.dp)) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.Article,
-                    contentDescription = null,
-                    tint = Muted,
-                    modifier = Modifier.padding(10.dp).size(22.dp)
-                )
+            Surface(
+                color = Leaf,
+                shape = CircleShape,
+                modifier = Modifier.size(54.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.Article,
+                        contentDescription = null,
+                        tint = Green,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("还没有社区动态", color = Ink, fontWeight = FontWeight.Medium, fontSize = 15.sp)
-                Text("发第一条，让大家看到你的分享。", color = Muted, fontSize = 12.sp)
-            }
+            Text("还没有社区动态", color = Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text("发第一条动态，开启温暖的人文社区交流吧。", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
         }
-        Box(
-            modifier = Modifier
-                .padding(start = 58.dp)
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(WechatDivider)
-        )
-        Spacer(
-            Modifier
-                .height(8.dp)
-                .fillMaxWidth()
-                .background(WechatScreen)
-        )
     }
 }
 
@@ -6494,9 +6542,9 @@ private fun Panel(
     Surface(
         modifier = modifier,
         color = Color.White.copy(alpha = 0.96f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, Line.copy(alpha = 0.72f)),
-        shadowElevation = 1.dp
+        shape = AppCardShape,
+        border = BorderStroke(1.dp, Line.copy(alpha = 0.6f)),
+        shadowElevation = 3.dp
     ) {
         Column(modifier = Modifier.padding(16.dp), content = content)
     }
@@ -6519,8 +6567,37 @@ private fun rememberUriImage(uriString: String?) = LocalContext.current.let { co
             runCatching {
                 val normalized = absoluteAssetUrl(uriString)
                 if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
-                    URL(normalized).openStream().use { input ->
-                        BitmapFactory.decodeStream(input)?.asImageBitmap()
+                    if (!BuildConfig.DEBUG && normalized.startsWith("http://")) {
+                        return@runCatching null
+                    }
+                    val isAsset = Uri.parse(normalized).path.orEmpty().startsWith("/assets/")
+                    if (isAsset) {
+                        val connection = (URL(normalized).openConnection() as? HttpURLConnection)
+                            ?: return@runCatching null
+                        try {
+                            connection.connectTimeout = 12_000
+                            connection.readTimeout = 20_000
+                            connection.requestMethod = "GET"
+                            context.appPrefs().getString(KEY_AUTH_TOKEN, null)
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { connection.setRequestProperty("Authorization", "Bearer $it") }
+                            connection.connect()
+                            if (connection.responseCode !in 200..299) {
+                                null
+                            } else {
+                                connection.inputStream.use { input ->
+                                    BitmapFactory.decodeStream(input)?.asImageBitmap()
+                                }
+                            }
+                        } finally {
+                            connection.disconnect()
+                        }
+                    } else {
+                        val cached = context.loadCachedCloudResource(normalized)
+                        val input = if (cached != null) FileInputStream(cached) else URL(normalized).openStream()
+                        input.use {
+                            BitmapFactory.decodeStream(input)?.asImageBitmap()
+                        }
                     }
                 } else {
                     context.contentResolver.openInputStream(Uri.parse(normalized)).use { input ->
@@ -6529,6 +6606,143 @@ private fun rememberUriImage(uriString: String?) = LocalContext.current.let { co
                 }
             }.getOrNull()
         }
+    }
+}
+
+private fun Context.openCachedCloudResourceResponse(url: String): WebResourceResponse? {
+    val file = loadCachedCloudResource(url) ?: return null
+    val mimeType = mimeTypeForCloudResource(url)
+    val encoding = if (mimeType.startsWith("text/") || mimeType == "application/json" || mimeType == "application/javascript") {
+        "UTF-8"
+    } else {
+        null
+    }
+    return WebResourceResponse(mimeType, encoding, FileInputStream(file)).apply {
+        responseHeaders = mapOf(
+            "Cache-Control" to "public, max-age=31536000, immutable",
+            "X-Anyi-Cache" to "disk"
+        )
+    }
+}
+
+private fun Context.loadCachedCloudResource(url: String): File? {
+    if (!isCacheableCloudResource(url)) return null
+    val cacheDir = File(this.cacheDir, CLOUD_CACHE_DIR).apply { mkdirs() }
+    val cacheFile = File(cacheDir, cloudCacheFileName(url))
+    if (cacheFile.isFile && cacheFile.length() > 0L) {
+        cacheFile.setLastModified(System.currentTimeMillis())
+        return cacheFile
+    }
+
+    val tmpFile = File(cacheDir, "${cacheFile.name}.${UUID.randomUUID()}.tmp")
+    val connection = (URL(url).openConnection() as? HttpURLConnection) ?: return null
+    return try {
+        if (!BuildConfig.DEBUG && !url.startsWith("https://")) {
+            return null
+        }
+        connection.connectTimeout = 12_000
+        connection.readTimeout = 20_000
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Accept-Encoding", "identity")
+        connection.connect()
+        if (connection.responseCode !in 200..299) {
+            null
+        } else {
+            connection.inputStream.use { input ->
+                tmpFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (tmpFile.length() <= 0L) {
+                tmpFile.delete()
+                null
+            } else {
+                if (!tmpFile.renameTo(cacheFile)) {
+                    tmpFile.copyTo(cacheFile, overwrite = true)
+                    tmpFile.delete()
+                }
+                pruneCloudResourceCache()
+                cacheFile
+            }
+        }
+    } catch (_: Exception) {
+        tmpFile.delete()
+        cacheFile.takeIf { it.isFile && it.length() > 0L }
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun Context.pruneCloudResourceCache() {
+    val dir = File(cacheDir, CLOUD_CACHE_DIR)
+    val files = dir.listFiles()?.filter { it.isFile } ?: return
+    var totalBytes = files.sumOf { it.length() }
+    if (totalBytes <= CLOUD_CACHE_MAX_BYTES) return
+    files.sortedBy { it.lastModified() }.forEach { file ->
+        if (totalBytes <= CLOUD_CACHE_TARGET_BYTES) return@forEach
+        val size = file.length()
+        if (file.delete()) {
+            totalBytes -= size
+        }
+    }
+}
+
+private fun isCacheableCloudResource(url: String): Boolean {
+    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+    val scheme = uri.scheme?.lowercase(Locale.US)
+    if (scheme != "https" && scheme != "http") return false
+    val apiHost = runCatching { Uri.parse(BuildConfig.API_BASE_URL).host }.getOrNull()
+    if (uri.host != apiHost && uri.host != "api.anyibj.cn") return false
+    val path = uri.path.orEmpty().lowercase(Locale.US)
+    val inStaticArea = path.startsWith("/assets/") ||
+        path.startsWith("/vtuber/") ||
+        path.startsWith("/live2d-models/") ||
+        path.startsWith("/downloads/")
+    if (!inStaticArea || path.endsWith("/") || path.endsWith(".html") || path.endsWith(".htm")) {
+        return false
+    }
+    return listOf(
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+        ".svg",
+        ".css",
+        ".js",
+        ".mjs",
+        ".json",
+        ".moc3",
+        ".wasm",
+        ".atlas",
+        ".skel",
+        ".wav",
+        ".mp3",
+        ".ogg"
+    ).any { path.endsWith(it) }
+}
+
+private fun cloudCacheFileName(url: String): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest(url.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
+    val path = Uri.parse(url).path.orEmpty()
+    val extension = path.substringAfterLast('/', "")
+        .substringAfterLast('.', "")
+        .takeIf { it.length in 1..12 && it.all { char -> char.isLetterOrDigit() } }
+        ?.let { ".$it" }
+        ?: ".bin"
+    return "$digest$extension"
+}
+
+private fun mimeTypeForCloudResource(url: String): String {
+    val path = Uri.parse(url).path.orEmpty().lowercase(Locale.US)
+    return when {
+        path.endsWith(".js") || path.endsWith(".mjs") -> "application/javascript"
+        path.endsWith(".css") -> "text/css"
+        path.endsWith(".json") -> "application/json"
+        path.endsWith(".svg") -> "image/svg+xml"
+        path.endsWith(".wasm") -> "application/wasm"
+        path.endsWith(".moc3") || path.endsWith(".atlas") || path.endsWith(".skel") -> "application/octet-stream"
+        else -> URLConnection.guessContentTypeFromName(path) ?: "application/octet-stream"
     }
 }
 
@@ -6610,23 +6824,6 @@ private fun clearSession(context: Context) {
         .remove(KEY_USER_AVATAR)
         .remove(KEY_AUTH_TOKEN)
         .apply()
-}
-
-private fun registerUser(context: Context, username: String, password: String): AppUser {
-    val role = if (username.equals("admin", ignoreCase = true)) "admin" else "user"
-    context.appPrefs().edit()
-        .putString("user:$username:password", password)
-        .putString("user:$username:role", role)
-        .apply()
-    return AppUser(id = username, username = username, displayName = username, role = role, token = "")
-}
-
-private fun loginUser(context: Context, username: String, password: String): AppUser? {
-    val prefs = context.appPrefs()
-    val storedPassword = prefs.getString("user:$username:password", null) ?: return null
-    if (storedPassword != password) return null
-    val role = prefs.getString("user:$username:role", null) ?: "user"
-    return AppUser(id = username, username = username, displayName = username, role = role, token = "")
 }
 
 private fun Context.persistReadPermission(uri: Uri) {
@@ -6713,7 +6910,8 @@ private fun parseCommunityPost(item: JSONObject): CommunityPost {
         commentCount = item.optInt("commentCount", item.optInt("comment_count", 0)),
         likedByMe = item.optBoolean("likedByMe", item.optInt("liked_by_me", 0) == 1),
         createdAt = item.optLong("createdAt").takeIf { it > 0L }
-            ?: parseTimeMillis(item.optString("created_at"))
+            ?: parseTimeMillis(item.optString("created_at")),
+        moderationStatus = item.optString("moderationStatus", item.optString("status", "approved"))
     )
 }
 
@@ -6742,7 +6940,8 @@ private fun parseCommunityComment(item: JSONObject): CommunityComment {
         authorAvatarUrl = avatarUrl,
         content = item.optString("content"),
         createdAt = item.optLong("createdAt").takeIf { it > 0L }
-            ?: parseTimeMillis(item.optString("created_at"))
+            ?: parseTimeMillis(item.optString("created_at")),
+        moderationStatus = item.optString("moderationStatus", item.optString("status", "approved"))
     )
 }
 
@@ -6794,82 +6993,6 @@ private fun parseCommunityVolunteerApplication(item: JSONObject): CommunityVolun
     )
 }
 
-private fun parseChatMessages(array: JSONArray?): List<ChatMessage> {
-    if (array == null) return emptyList()
-    return List(array.length()) { index ->
-        val item = array.optJSONObject(index) ?: JSONObject()
-        ChatMessage(
-            id = item.optString("id"),
-            sender = item.optString("sender"),
-            content = item.optString("content"),
-            createdAt = item.optLong("createdAt").takeIf { it > 0L }
-                ?: parseTimeMillis(item.optString("created_at"))
-        )
-    }.filter { it.content.isNotBlank() }
-}
-
-private fun ChatMessage.speechUtteranceId(): String {
-    val stablePart = id.ifBlank { "$createdAt-${content.hashCode()}" }
-    return "anyi-ai-$stablePart"
-}
-
-private fun parseAiCompanions(array: JSONArray?): List<AiCompanion> {
-    if (array == null) return emptyList()
-    return List(array.length()) { index ->
-        parseAiCompanion(array.optJSONObject(index) ?: JSONObject())
-    }.filter { it.id.isNotBlank() }
-}
-
-private fun parseAiCompanion(item: JSONObject): AiCompanion {
-    return AiCompanion(
-        id = item.optString("id"),
-        displayName = item.optString("displayName", item.optString("relation", "陪伴人物")).ifBlank { "陪伴人物" },
-        gender = item.optString("gender", "不限定").ifBlank { "不限定" },
-        relation = item.optString("relation", "亲人").ifBlank { "亲人" },
-        avatarUrl = item.optString("avatarUrl").takeIf { it.isNotBlank() && it != "null" },
-        smileAvatarUrl = item.optString("smileAvatarUrl").takeIf { it.isNotBlank() && it != "null" },
-        avatarMotion = parseAvatarMotion(item.optJSONObject("avatarMotion")),
-        paidUnlocked = item.optBoolean("paidUnlocked", false),
-        photoCount = item.optInt("photoCount", 0),
-        voiceCount = item.optInt("voiceCount", 0),
-        momentCount = item.optInt("momentCount", 0),
-        generated = item.optBoolean("generated", false),
-        isDefault = item.optBoolean("isDefault", false),
-        updatedAt = item.optLong("updatedAt").takeIf { it > 0L }
-            ?: parseTimeMillis(item.optString("updated_at"))
-    )
-}
-
-private fun parseAvatarMotion(item: JSONObject?): AvatarMotion? {
-    if (item == null) return null
-    val face = parseAvatarMotionBox(
-        item.optJSONObject("face"),
-        AvatarMotionBox(x = 0.5f, y = 0.46f, w = 0.5f, h = 0.58f)
-    )
-    val mouth = parseAvatarMotionBox(
-        item.optJSONObject("mouth"),
-        AvatarMotionBox(x = face.x, y = (face.y + face.h * 0.34f).coerceAtMost(0.88f), w = face.w * 0.34f, h = face.h * 0.1f)
-    )
-    return AvatarMotion(
-        status = item.optString("status", "fallback"),
-        source = item.optString("source", "fallback"),
-        confidence = item.optDouble("confidence", 0.0).toFloat().coerceIn(0f, 1f),
-        face = face,
-        mouth = mouth
-    )
-}
-
-private fun parseAvatarMotionBox(item: JSONObject?, fallback: AvatarMotionBox): AvatarMotionBox {
-    val w = item?.optDouble("w", fallback.w.toDouble())?.toFloat()?.coerceIn(0.05f, 1f) ?: fallback.w
-    val h = item?.optDouble("h", fallback.h.toDouble())?.toFloat()?.coerceIn(0.03f, 1f) ?: fallback.h
-    return AvatarMotionBox(
-        x = (item?.optDouble("x", fallback.x.toDouble())?.toFloat() ?: fallback.x).coerceIn(w / 2f, 1f - w / 2f),
-        y = (item?.optDouble("y", fallback.y.toDouble())?.toFloat() ?: fallback.y).coerceIn(h / 2f, 1f - h / 2f),
-        w = w,
-        h = h
-    )
-}
-
 private fun parseSignedInUser(response: JSONObject): AppUser {
     return parseUserPayload(response.getJSONObject("user"), response.getString("token"))
 }
@@ -6903,19 +7026,27 @@ private fun Throwable.userFriendlyMessage(fallback: String): String {
         isAuthExpired() -> "登录状态已过期，请重新登录"
         code.contains("username_exists") -> "账号已存在，请直接登录"
         code.contains("weak_password") -> "密码至少需要 8 位"
+        code.contains("terms_approval_required") -> "请先阅读并同意用户协议和隐私政策"
         code.contains("invalid_credentials") -> "账号或密码不正确"
         code.contains("wechat_login_not_configured") -> "微信登录还没配置 AppID 和 AppSecret"
         code.contains("wechat_code_invalid") -> "微信授权已失效，请重新点微信登录"
         code.contains("wechat_userinfo_failed") -> "微信资料获取失败，请稍后重试"
         code.contains("community_post_delete_forbidden") -> "只能删除自己发布的动态"
         code.contains("community_comment_delete_forbidden") -> "只能删除自己动态下的评论"
+        code.contains("community_content_rejected") -> "内容未通过审核，请修改后再发布"
+        code.contains("community_image_not_owned") -> "社区图片必须来自你自己上传的素材"
+        code.contains("community_media_not_approved") -> "图片还在审核中，请稍后再试"
+        code.contains("community_report_exists") -> "你已经举报过这条内容"
+        code.contains("account_blocked") -> "账号暂时被限制使用"
+        code.contains("account_banned") -> "账号已被封禁"
+        code.contains("admin_account_deletion_forbidden") -> "管理员账号不能在 App 内注销"
         code.contains("flower_limit_reached") -> "当前已有 2 个花篮，冷却结束后再献花"
         code.contains("candle_limit_reached") -> "当前已有 2 根蜡烛，任一根燃尽后可继续点蜡烛"
         code.contains("durian_offering_requires_payment") -> "榴莲是付费供品，请先完成解锁"
         code.contains("apple_offering_limit_reached") -> "当前已有 3 个苹果，10 分钟后可继续放苹果"
         code.contains("durian_offering_limit_reached") -> "当前已有 1 个榴莲，10 分钟后可继续放榴莲"
         code.contains("invalid_fruit_type") -> "暂不支持这种供品"
-        code.contains("payment_webhook_not_configured") -> "支付回调还未配置"
+        code.contains("payment_not_configured") -> "付费功能暂未开放，请勿重复支付"
         code.contains("unsupported_file_type") -> "暂不支持这种文件类型，请更换图片或音频"
         code.contains("file_size_invalid") -> "文件过大或为空，图片最多 20MB，音频最多 50MB"
         code.contains("file_required") -> "没有读取到文件，请重新选择"
@@ -7017,7 +7148,9 @@ private fun defaultDigitalHumanUrl(): String {
 
 private fun normalizedDigitalHumanUrl(value: String?): String {
     val trimmed = value?.trim().orEmpty()
-    val safeUrl = trimmed.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+    val safeUrl = trimmed.takeIf {
+        it.startsWith("https://") || (BuildConfig.DEBUG && it.startsWith("http://"))
+    }
         ?: defaultDigitalHumanUrl()
     return if (safeUrl.endsWith("/")) safeUrl else "$safeUrl/"
 }
@@ -7029,6 +7162,7 @@ private fun absoluteAssetUrl(value: String): String {
         value.startsWith("http://101.42.1.45/assets/") -> value.replace("http://101.42.1.45", apiBase)
         value.startsWith("https://101.42.1.45/assets/") -> value.replace("https://101.42.1.45", apiBase)
         value.startsWith("http://api.anyibj.cn/assets/") -> value.replace("http://api.anyibj.cn", apiBase)
+        value.startsWith("http://api.anyibj.cn/") -> value.replace("http://api.anyibj.cn", apiBase)
         else -> value
     }
 }
@@ -7041,47 +7175,6 @@ private fun parseTimeMillis(raw: String): Long {
             timeZone = TimeZone.getTimeZone("UTC")
         }.parse(raw)?.time ?: System.currentTimeMillis()
     }.getOrElse { System.currentTimeMillis() }
-}
-
-private fun loadChatMessages(context: Context): List<ChatMessage> {
-    val raw = context.appPrefs().getString(KEY_AI_CHAT, null) ?: return emptyList()
-    return runCatching {
-        val array = JSONArray(raw)
-        List(array.length()) { index ->
-            val item = array.getJSONObject(index)
-            ChatMessage(
-                id = item.optString("id"),
-                sender = item.optString("sender"),
-                content = item.optString("content"),
-                createdAt = item.optLong("createdAt")
-            )
-        }
-    }.getOrElse { emptyList() }
-}
-
-private fun saveChatMessages(context: Context, messages: List<ChatMessage>) {
-    val array = JSONArray()
-    messages.forEach { message ->
-        array.put(
-            JSONObject()
-                .put("id", message.id)
-                .put("sender", message.sender)
-                .put("content", message.content)
-                .put("createdAt", message.createdAt)
-        )
-    }
-    context.appPrefs().edit().putString(KEY_AI_CHAT, array.toString()).apply()
-}
-
-private fun companionReply(relation: String, content: String): String {
-    val prefix = when (relation) {
-        "宠物" -> "我好像听见你在叫我。"
-        "朋友" -> "我在，慢慢说。"
-        "伴侣" -> "我一直在认真听你说。"
-        else -> "我在这里陪着你。"
-    }
-    val echo = content.take(18)
-    return "$prefix 你刚才说「$echo」，这句话我会记在心里。"
 }
 
 private fun flowerChoices() = listOf(

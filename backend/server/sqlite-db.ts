@@ -57,6 +57,8 @@ export class SqlitePreparedStatement {
 }
 
 export class SqliteDatabaseAdapter {
+  readonly dialect = "sqlite" as const;
+
   constructor(private readonly db: Database.Database) {}
 
   prepare(query: string) {
@@ -68,9 +70,18 @@ export class SqliteDatabaseAdapter {
     return transaction();
   }
 
+  async hasColumn(tableName: string, columnName: string) {
+    const rows = this.db.prepare(`PRAGMA table_info(${quoteIdentifier(tableName)})`).all() as { name: string }[];
+    return rows.some((row) => row.name === columnName);
+  }
+
   close() {
     this.db.close();
   }
+}
+
+function quoteIdentifier(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 export function openSqliteDatabase(dbPath: string) {

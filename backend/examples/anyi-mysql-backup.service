@@ -1,0 +1,16 @@
+[Unit]
+Description=Anyi MySQL and uploads backup
+Wants=mysql.service
+After=mysql.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+Environment=ANYI_ENV_FILE=/opt/anyiapp2/backend/.env
+Environment=ANYI_BACKUP_DIR=/home/ubuntu/anyi-db-backups
+Environment=ANYI_BACKUP_RETENTION_DAYS=14
+ExecStart=/usr/local/bin/anyi-mysql-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

@@ -7,6 +7,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/opt/anyiapp2/backend
 EnvironmentFile=/opt/anyiapp2/backend/.env
+Environment=HOST=127.0.0.1
 ExecStart=/usr/bin/node /opt/anyiapp2/backend/dist-node/server/server.js
 Restart=always
 RestartSec=3

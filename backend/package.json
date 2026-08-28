@@ -5,8 +5,11 @@
   "scripts": {
     "server:build": "tsc -p tsconfig.node.json",
     "server:start": "node dist-node/server/server.js",
+    "admin:promote": "node scripts/set-admin-role.mjs",
     "server:restart": "npm run server:build && npm run server:start",
     "asset:delete:process": "powershell -ExecutionPolicy Bypass -File scripts/process-asset-delete-queue.ps1",
+    "db:migrate:mysql": "node scripts/migrate-sqlite-to-mysql.mjs",
+    "db:migrate:mysql:dry-run": "node scripts/migrate-sqlite-to-mysql.mjs --dry-run",
     "digital-human:smoke": "node scripts/digital-human-smoke.mjs",
     "check": "tsc --noEmit"
   },
@@ -14,7 +17,8 @@
     "@hono/node-server": "^2.0.2",
     "better-sqlite3": "^12.10.0",
     "dotenv": "^17.4.2",
-    "hono": "^4.7.11"
+    "hono": "^4.7.11",
+    "mysql2": "^3.22.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

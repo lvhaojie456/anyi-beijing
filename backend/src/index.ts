@@ -7,10 +7,11 @@ type Bindings = {
   DB: AppDatabase;
   ASSETS: AssetBucket;
   AUTH_SECRET: string;
-  ADMIN_USERNAMES?: string;
   PUBLIC_ASSET_BASE_URL?: string;
   ALLOWED_ORIGINS?: string;
   RATE_LIMIT_ENABLED?: string;
+  PAYMENT_ENABLED?: string;
+  PAYMENT_WEBHOOK_SECRET?: string;
   AI_BASE_URL?: string;
   AI_API_KEY?: string;
   AI_MODEL?: string;
@@ -18,6 +19,7 @@ type Bindings = {
   AI_IMAGE_API_KEY?: string;
   AI_IMAGE_MODEL?: string;
   AI_VISION_MODEL?: string;
+  DIGITAL_HUMAN_CHAT_MODEL?: string;
   AI_TIMEOUT_MS?: string;
   WECHAT_APP_ID?: string;
   WECHAT_APP_SECRET?: string;
@@ -36,9 +38,13 @@ type AppPreparedStatement = {
   run(): Promise<{ success: boolean; meta: Record<string, unknown> }>;
 };
 
+type DatabaseDialect = "sqlite" | "mysql";
+
 type AppDatabase = {
+  readonly dialect: DatabaseDialect;
   prepare(query: string): AppPreparedStatement;
   batch(statements: AppPreparedStatement[]): Promise<unknown>;
+  hasColumn(tableName: string, columnName: string): Promise<boolean>;
 };
 
 type AssetBucket = {
@@ -134,6 +140,10 @@ type CommunityPostRow = {
   like_count?: number;
   comment_count?: number;
   liked_by_me?: number;
+  status?: "pending" | "approved" | "rejected" | "blocked";
+  moderation_reason?: string | null;
+  moderated_at?: string | null;
+  moderated_by?: string | null;
 };
 
 type CommunityCommentRow = {
@@ -145,6 +155,34 @@ type CommunityCommentRow = {
   avatar_url: string | null;
   content: string;
   created_at: string;
+  updated_at: string;
+  status?: "pending" | "approved" | "rejected" | "blocked";
+  moderation_reason?: string | null;
+  moderated_at?: string | null;
+  moderated_by?: string | null;
+};
+
+type CommunityReportRow = {
+  id: string;
+  reporter_id: string;
+  target_type: "post" | "comment";
+  target_id: string;
+  reason: string;
+  status: "pending" | "actioned" | "dismissed";
+  reviewer_id: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  reporter_username?: string;
+  reporter_display_name?: string;
+};
+
+type UserModerationRow = {
+  user_id: string;
+  status: "blocked" | "banned";
+  reason: string | null;
+  expires_at: string | null;
+  updated_by: string | null;
   updated_at: string;
 };
 
@@ -207,6 +245,18 @@ type AiChatRow = {
   created_at: string;
 };
 
+type DigitalHumanChatPersona = {
+  id: "grandpa" | "grandma";
+  label: string;
+  address: string;
+  tone: string;
+};
+
+type DigitalHumanChatHistoryMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const flowerDurationMs = 10 * 60 * 1000;
@@ -261,6 +311,12 @@ app.use("*", async (c, next) => {
   if (contentType?.startsWith("application/json") && !contentType.includes("charset")) {
     c.res.headers.set("Content-Type", "application/json; charset=utf-8");
   }
+  c.res.headers.set("X-Content-Type-Options", "nosniff");
+  c.res.headers.set("X-Frame-Options", "DENY");
+  c.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (c.req.header("X-Forwarded-Proto") === "https") {
+    c.res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
 });
 
 async function corsMiddleware(c: Context<AppEnv>, next: () => Promise<void>) {
@@ -298,12 +354,7 @@ async function rateLimitMiddleware(c: Context<AppEnv>, next: () => Promise<void>
   const bucketKey = `${clientIp(c)}:${policy.scope}`;
   const now = new Date().toISOString();
 
-  await c.env.DB.prepare(
-    `INSERT INTO rate_limits (bucket_key, route_key, window_start, count, updated_at)
-     VALUES (?, ?, ?, 1, ?)
-     ON CONFLICT(bucket_key, route_key, window_start)
-     DO UPDATE SET count = count + 1, updated_at = excluded.updated_at`
-  )
+  await c.env.DB.prepare(rateLimitUpsertSql(c.env.DB.dialect))
     .bind(bucketKey, policy.routeKey, windowStart, now)
     .run();
 
@@ -325,10 +376,86 @@ async function rateLimitMiddleware(c: Context<AppEnv>, next: () => Promise<void>
   }
 
   if (Math.random() < 0.01) {
-    await c.env.DB.prepare("DELETE FROM rate_limits WHERE updated_at < datetime('now', '-2 hours')").run();
+    const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    await c.env.DB.prepare("DELETE FROM rate_limits WHERE updated_at < ?").bind(cutoff).run();
   }
 
   await next();
+}
+
+function rateLimitUpsertSql(dialect: DatabaseDialect) {
+  if (dialect === "mysql") {
+    return `INSERT INTO rate_limits (bucket_key, route_key, window_start, count, updated_at)
+     VALUES (?, ?, ?, 1, ?)
+     ON DUPLICATE KEY UPDATE count = count + 1, updated_at = VALUES(updated_at)`;
+  }
+
+  return `INSERT INTO rate_limits (bucket_key, route_key, window_start, count, updated_at)
+     VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT(bucket_key, route_key, window_start)
+     DO UPDATE SET count = count + 1, updated_at = excluded.updated_at`;
+}
+
+function featureUnlockInsertSql(dialect: DatabaseDialect) {
+  if (dialect === "mysql") {
+    return "INSERT IGNORE INTO feature_unlocks (user_id, feature, created_at) VALUES (?, ?, ?)";
+  }
+
+  return "INSERT OR IGNORE INTO feature_unlocks (user_id, feature, created_at) VALUES (?, ?, ?)";
+}
+
+function isPaidFeature(feature: string) {
+  return feature === "hall_more" || feature === durianOfferingFeature;
+}
+
+function saveAiCompanionSql(dialect: DatabaseDialect) {
+  const insert = `INSERT INTO ai_companions (
+      id, user_id, display_name, gender, relation, avatar_url, smile_avatar_url, avatar_motion_json, paid_unlocked,
+      photo_count, voice_count, moment_count, generated, avatar_style_json, kernel_json, is_default, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+  if (dialect === "mysql") {
+    const mysqlInsert = `INSERT INTO ai_companions (
+      id, user_id, display_name, gender, relation, avatar_url, smile_avatar_url, avatar_motion_json, paid_unlocked,
+      photo_count, voice_count, moment_count, \`generated\`, avatar_style_json, kernel_json, is_default, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+    return `${mysqlInsert}
+    ON DUPLICATE KEY UPDATE
+      display_name = VALUES(display_name),
+      gender = VALUES(gender),
+      relation = VALUES(relation),
+      avatar_url = VALUES(avatar_url),
+      smile_avatar_url = VALUES(smile_avatar_url),
+      avatar_motion_json = VALUES(avatar_motion_json),
+      paid_unlocked = VALUES(paid_unlocked),
+      photo_count = VALUES(photo_count),
+      voice_count = VALUES(voice_count),
+      moment_count = VALUES(moment_count),
+      \`generated\` = VALUES(\`generated\`),
+      avatar_style_json = VALUES(avatar_style_json),
+      kernel_json = VALUES(kernel_json),
+      is_default = VALUES(is_default),
+      updated_at = VALUES(updated_at)`;
+  }
+
+  return `${insert}
+    ON CONFLICT(id) DO UPDATE SET
+      display_name = excluded.display_name,
+      gender = excluded.gender,
+      relation = excluded.relation,
+      avatar_url = excluded.avatar_url,
+      smile_avatar_url = excluded.smile_avatar_url,
+      avatar_motion_json = excluded.avatar_motion_json,
+      paid_unlocked = excluded.paid_unlocked,
+      photo_count = excluded.photo_count,
+      voice_count = excluded.voice_count,
+      moment_count = excluded.moment_count,
+      generated = excluded.generated,
+      avatar_style_json = excluded.avatar_style_json,
+      kernel_json = excluded.kernel_json,
+      is_default = excluded.is_default,
+      updated_at = excluded.updated_at`;
 }
 
 app.onError((error) => {
@@ -350,7 +477,13 @@ app.get("/health", (c) =>
 
 app.get("/app/config", (c) =>
   c.json({
-    digitalHuman: digitalHumanConfig(c)
+    digitalHuman: digitalHumanConfig(c),
+    wechat: {
+      enabled: Boolean(c.env.WECHAT_APP_ID?.trim() && c.env.WECHAT_APP_SECRET?.trim())
+    },
+    payments: {
+      enabled: readEnvBoolean(c.env.PAYMENT_ENABLED, false)
+    }
   })
 );
 
@@ -412,15 +545,43 @@ const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
 
   const user = await verifyToken(c.env, token);
+  await assertUserCanUseAccount(c, user);
   c.set("user", user);
   await next();
 };
+
+app.post("/app/digital-human/chat", requireAuth, async (c) => {
+  const body = await parseJson(c);
+  const characterId = readString(body, "characterId", { required: true, max: 40 });
+  const persona = digitalHumanChatPersona(characterId);
+  if (!persona) {
+    throw new ApiError(400, "digital_human_character_not_supported");
+  }
+  const message = readString(body, "message", { required: true, max: 500 });
+  const history = readDigitalHumanChatHistory(body);
+  const reply = await requestDigitalHumanChatReply(c.env, persona, history, message);
+  const now = Date.now();
+  return c.json({
+    characterId: persona.id,
+    model: digitalHumanChatModel(c.env),
+    message: {
+      id: crypto.randomUUID(),
+      sender: "assistant",
+      content: reply,
+      createdAt: now
+    }
+  });
+});
 
 app.post("/auth/register", async (c) => {
   const body = await parseJson(c);
   const username = readString(body, "username", { required: true, max: 32 }).toLowerCase();
   const password = readString(body, "password", { required: true, max: 128 });
   const displayName = readString(body, "displayName", { max: 40 }) || username;
+
+  if (body.acceptedTerms !== true || body.acceptedPrivacy !== true) {
+    throw new ApiError(400, "terms_approval_required");
+  }
 
   if (!/^[a-z0-9_]{3,32}$/.test(username)) {
     throw new ApiError(400, "invalid_username");
@@ -438,14 +599,19 @@ app.post("/auth/register", async (c) => {
   }
 
   const id = crypto.randomUUID();
-  const role = roleForUsername(c.env, username);
+  // Public registration can never create an administrator. Promote an existing
+  // account through an authenticated operator/SQL procedure instead.
+  const role: Role = "user";
   const passwordHash = await hashPassword(password);
   const createdAt = new Date().toISOString();
 
   await c.env.DB.prepare(
-    "INSERT INTO users (id, username, password_hash, display_name, role, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    `INSERT INTO users (
+      id, username, password_hash, display_name, role, created_at,
+      terms_accepted_at, privacy_accepted_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
-    .bind(id, username, passwordHash, displayName, role, createdAt)
+    .bind(id, username, passwordHash, displayName, role, createdAt, createdAt, createdAt)
     .run();
 
   const user = { id, username, displayName, role, avatarUrl: null };
@@ -481,6 +647,9 @@ app.post("/auth/wechat", async (c) => {
   }
 
   const body = await parseJson(c);
+  if (body.acceptedTerms !== true || body.acceptedPrivacy !== true) {
+    throw new ApiError(400, "terms_approval_required");
+  }
   const code = readString(body, "code", { required: true, max: 256 });
   const tokenPayload = await exchangeWechatCode(appId, appSecret, code);
   const openid = tokenPayload.openid || "";
@@ -503,10 +672,11 @@ app.post("/auth/wechat", async (c) => {
        SET display_name = ?, avatar_url = COALESCE(?, avatar_url),
            wechat_openid = COALESCE(wechat_openid, ?),
            wechat_unionid = COALESCE(wechat_unionid, ?),
-           wechat_nickname = ?, deleted_at = NULL
+           wechat_nickname = ?, terms_accepted_at = COALESCE(terms_accepted_at, ?),
+           privacy_accepted_at = COALESCE(privacy_accepted_at, ?), deleted_at = NULL
        WHERE id = ?`
     )
-      .bind(displayName, avatarUrl || null, openid, finalUnionid, displayName, row.id)
+      .bind(displayName, avatarUrl || null, openid, finalUnionid, displayName, now, now, row.id)
       .run();
     userRow = await c.env.DB.prepare(
       "SELECT id, username, display_name, avatar_url, role FROM users WHERE id = ?"
@@ -520,10 +690,24 @@ app.post("/auth/wechat", async (c) => {
     await c.env.DB.prepare(
       `INSERT INTO users (
         id, username, password_hash, display_name, role, avatar_url,
-        created_at, wechat_openid, wechat_unionid, wechat_nickname
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        created_at, terms_accepted_at, privacy_accepted_at,
+        wechat_openid, wechat_unionid, wechat_nickname
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-      .bind(id, username, passwordHash, displayName, "user", avatarUrl || null, now, openid, finalUnionid, displayName)
+      .bind(
+        id,
+        username,
+        passwordHash,
+        displayName,
+        "user",
+        avatarUrl || null,
+        now,
+        now,
+        now,
+        openid,
+        finalUnionid,
+        displayName
+      )
       .run();
     userRow = await c.env.DB.prepare(
       "SELECT id, username, display_name, avatar_url, role FROM users WHERE id = ?"
@@ -539,7 +723,7 @@ app.post("/auth/wechat", async (c) => {
 
 app.get("/me", requireAuth, (c) => c.json({ user: c.get("user") }));
 
-app.patch("/me", requireAuth, async (c) => {
+const updateCurrentUserHandler = async (c: Context<AppEnv>) => {
   const user = c.get("user");
   const body = await parseJson(c);
   const displayName = "displayName" in body
@@ -550,6 +734,7 @@ app.patch("/me", requireAuth, async (c) => {
     : user.avatarUrl;
   const now = new Date().toISOString();
 
+  await prepareProfileAvatar(c, user.id, avatarUrl);
   await c.env.DB.prepare("UPDATE users SET display_name = ?, avatar_url = ? WHERE id = ?")
     .bind(displayName, avatarUrl, user.id)
     .run();
@@ -572,38 +757,113 @@ app.patch("/me", requireAuth, async (c) => {
     .first<UserRow>();
 
   return c.json({ user: toAuthUser(requireRow(row)) });
-});
+};
+
+app.patch("/me", requireAuth, updateCurrentUserHandler);
+app.put("/me", requireAuth, updateCurrentUserHandler);
 
 app.delete("/me", requireAuth, async (c) => {
   const user = c.get("user");
-  await c.env.DB.prepare("UPDATE users SET deleted_at = ? WHERE id = ?")
-    .bind(new Date().toISOString(), user.id)
-    .run();
-  await queueUserAssetsForDeletion(c, user.id, "account_deleted");
+  if (user.role === "admin") {
+    throw new ApiError(403, "admin_account_deletion_forbidden");
+  }
+
+  const assetRows = await c.env.DB.prepare("SELECT asset_key FROM assets WHERE owner_id = ?")
+    .bind(user.id)
+    .all<{ asset_key: string }>();
+
   await writeAudit(c, {
     action: "user.account.delete",
     targetType: "user",
-    targetId: user.id
+    targetId: user.id,
+    metadata: { hardDelete: true }
   });
+
+  for (const row of assetRows.results) {
+    await queueAssetDelete(c, row.asset_key, user.id, "account_deleted");
+  }
+
+  // Remove user-owned records before the user row so this also works with the
+  // stricter foreign keys used by the MySQL deployment.
+  const cleanupStatements = [
+    [
+      "DELETE FROM community_reports WHERE target_type = 'comment' AND target_id IN (SELECT id FROM community_post_comments WHERE user_id = ?)",
+      [user.id]
+    ],
+    ["DELETE FROM community_post_comments WHERE user_id = ?", [user.id]],
+    ["DELETE FROM community_post_likes WHERE user_id = ?", [user.id]],
+    [
+      "DELETE FROM community_post_comments WHERE post_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
+      [user.id]
+    ],
+    [
+      "DELETE FROM community_post_likes WHERE post_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
+      [user.id]
+    ],
+    ["DELETE FROM community_reports WHERE reporter_id = ?", [user.id]],
+    [
+      "DELETE FROM community_reports WHERE target_type = 'post' AND target_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
+      [user.id]
+    ],
+    ["DELETE FROM community_posts WHERE user_id = ?", [user.id]],
+    ["DELETE FROM community_volunteer_applications WHERE user_id = ?", [user.id]],
+    ["DELETE FROM ai_chat_messages WHERE user_id = ?", [user.id]],
+    ["DELETE FROM ai_companions WHERE user_id = ?", [user.id]],
+    ["DELETE FROM ai_profiles WHERE user_id = ?", [user.id]],
+    ["DELETE FROM feature_unlocks WHERE user_id = ?", [user.id]],
+    ["DELETE FROM memorials WHERE owner_id = ?", [user.id]],
+    [
+      "DELETE FROM order_messages WHERE sender_id = ? OR order_id IN (SELECT id FROM ritual_orders WHERE user_id = ?)",
+      [user.id, user.id]
+    ],
+    [
+      "DELETE FROM payment_events WHERE order_id IN (SELECT id FROM ritual_orders WHERE user_id = ?) OR order_id IN (SELECT id FROM talisman_orders WHERE user_id = ?)",
+      [user.id, user.id]
+    ],
+    ["DELETE FROM ritual_orders WHERE user_id = ?", [user.id]],
+    ["DELETE FROM talisman_orders WHERE user_id = ?", [user.id]],
+    ["DELETE FROM upload_reviews WHERE owner_id = ?", [user.id]],
+    ["DELETE FROM crash_reports WHERE user_id = ?", [user.id]],
+    ["DELETE FROM user_moderation WHERE user_id = ?", [user.id]],
+    ["UPDATE asset_delete_queue SET owner_id = NULL WHERE owner_id = ?", [user.id]],
+    ["DELETE FROM assets WHERE owner_id = ?", [user.id]],
+    ["UPDATE audit_logs SET actor_id = NULL WHERE actor_id = ?", [user.id]],
+    ["DELETE FROM users WHERE id = ?", [user.id]]
+  ] as Array<[string, unknown[]]>;
+
+  for (const [query, params] of cleanupStatements) {
+    await c.env.DB.prepare(query).bind(...params).run();
+  }
+
+  // Keep the response deliberately small: the token is invalid as soon as the
+  // user row is removed and all private records have been cleaned up.
   return c.json({ ok: true });
 });
 
 app.get("/community/posts", requireAuth, async (c) => {
   const user = c.get("user");
+  const visibilitySql = user.role === "admin"
+    ? "1 = 1"
+    : "(p.status = 'approved' OR p.user_id = ?)";
+  const params: unknown[] = [user.id];
+  if (user.role !== "admin") {
+    params.push(user.id);
+  }
   const rows = await c.env.DB.prepare(
     `SELECT p.*, u.username, u.display_name, u.avatar_url,
       (SELECT COUNT(*) FROM community_post_likes l WHERE l.post_id = p.id) AS like_count,
-      (SELECT COUNT(*) FROM community_post_comments cc WHERE cc.post_id = p.id) AS comment_count,
+      (SELECT COUNT(*) FROM community_post_comments cc
+        WHERE cc.post_id = p.id AND cc.status = 'approved') AS comment_count,
       CASE WHEN EXISTS (
         SELECT 1 FROM community_post_likes l WHERE l.post_id = p.id AND l.user_id = ?
       ) THEN 1 ELSE 0 END AS liked_by_me
      FROM community_posts p
      JOIN users u ON u.id = p.user_id
-     WHERE u.deleted_at IS NULL
+     WHERE u.deleted_at IS NULL AND ${visibilitySql}
      ORDER BY p.created_at DESC
      LIMIT 100`
   )
-    .bind(user.id)
+    .bind(...params)
     .all<CommunityPostRow>();
 
   return c.json({ posts: rows.results.map(serializeCommunityPost) });
@@ -617,14 +877,23 @@ app.post("/community/posts", requireAuth, async (c) => {
   if (!content && imageUrls.length === 0) {
     throw new ApiError(400, "community_post_empty");
   }
+  const moderation = await moderateCommunityPost(c, user, content, imageUrls);
+  if (moderation.status === "rejected") {
+    throw new ApiError(422, "community_content_rejected", { reason: moderation.reason });
+  }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
   await c.env.DB.prepare(
-    "INSERT INTO community_posts (id, user_id, content, image_urls, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+    `INSERT INTO community_posts (
+      id, user_id, content, image_urls, status, moderation_reason,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
-    .bind(id, user.id, content, JSON.stringify(imageUrls), now, now)
+    .bind(id, user.id, content, JSON.stringify(imageUrls), moderation.status, moderation.reason, now, now)
     .run();
+
+  await setCommunityAssetVisibility(c, imageUrls, moderation.status === "approved" ? "public" : "private", user.id);
 
   await writeAudit(c, {
     action: "community.post.create",
@@ -653,9 +922,14 @@ app.delete("/community/posts/:id", requireAuth, async (c) => {
     .bind(post.id)
     .run();
 
+  await c.env.DB.prepare("DELETE FROM community_reports WHERE target_type = 'post' AND target_id = ?")
+    .bind(post.id)
+    .run();
+
   for (const url of parseStringArray(post.image_urls || "[]")) {
     const key = assetKeyFromUrl(url);
     if (key) {
+      await setAssetVisibility(c, key, "private", post.user_id);
       await queueAssetDelete(c, key, post.user_id, "community_post_deleted");
     }
   }
@@ -672,15 +946,22 @@ app.delete("/community/posts/:id", requireAuth, async (c) => {
 app.get("/community/posts/:id/comments", requireAuth, async (c) => {
   const user = c.get("user");
   const post = await loadCommunityPostForUser(c, c.req.param("id"), user.id);
+  const visibilitySql = user.role === "admin" || post.user_id === user.id
+    ? "1 = 1"
+    : "(cc.status = 'approved' OR cc.user_id = ?)";
+  const params: unknown[] = [post.id];
+  if (user.role !== "admin" && post.user_id !== user.id) {
+    params.push(user.id);
+  }
   const rows = await c.env.DB.prepare(
     `SELECT cc.*, u.username, u.display_name, u.avatar_url
      FROM community_post_comments cc
      JOIN users u ON u.id = cc.user_id
-     WHERE cc.post_id = ? AND u.deleted_at IS NULL
+     WHERE cc.post_id = ? AND u.deleted_at IS NULL AND ${visibilitySql}
      ORDER BY cc.created_at ASC
      LIMIT 200`
   )
-    .bind(post.id)
+    .bind(...params)
     .all<CommunityCommentRow>();
 
   return c.json({ comments: rows.results.map(serializeCommunityComment) });
@@ -691,13 +972,20 @@ app.post("/community/posts/:id/comments", requireAuth, async (c) => {
   const post = await loadCommunityPostForUser(c, c.req.param("id"), user.id);
   const body = await parseJson(c);
   const content = readString(body, "content", { required: true, max: 300 });
+  const moderation = moderateCommunityText(content);
+  if (moderation.status === "rejected") {
+    throw new ApiError(422, "community_content_rejected", { reason: moderation.reason });
+  }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
   await c.env.DB.prepare(
-    "INSERT INTO community_post_comments (id, post_id, user_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+    `INSERT INTO community_post_comments (
+      id, post_id, user_id, content, status, moderation_reason,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
-    .bind(id, post.id, user.id, content, now, now)
+    .bind(id, post.id, user.id, content, moderation.status, moderation.reason, now, now)
     .run();
 
   await writeAudit(c, {
@@ -719,11 +1007,15 @@ app.delete("/community/posts/:postId/comments/:commentId", requireAuth, async (c
   if (comment.post_id !== post.id) {
     throw new ApiError(404, "community_comment_not_found");
   }
-  if (post.user_id !== user.id && user.role !== "admin") {
+  if (comment.user_id !== user.id && post.user_id !== user.id && user.role !== "admin") {
     throw new ApiError(403, "community_comment_delete_forbidden");
   }
 
   await c.env.DB.prepare("DELETE FROM community_post_comments WHERE id = ?")
+    .bind(comment.id)
+    .run();
+
+  await c.env.DB.prepare("DELETE FROM community_reports WHERE target_type = 'comment' AND target_id = ?")
     .bind(comment.id)
     .run();
 
@@ -763,6 +1055,51 @@ app.post("/community/posts/:id/like", requireAuth, async (c) => {
   return c.json({ post: serializeCommunityPost(updated) });
 });
 
+app.post("/community/reports", requireAuth, async (c) => {
+  const user = c.get("user");
+  const body = await parseJson(c);
+  const targetType = readString(body, "targetType", { required: true, max: 20 });
+  const targetId = readString(body, "targetId", { required: true, max: 80 });
+  const reason = readString(body, "reason", { required: true, max: 300 });
+  if (targetType !== "post" && targetType !== "comment") {
+    throw new ApiError(400, "invalid_community_report_target");
+  }
+
+  if (targetType === "post") {
+    await loadCommunityPostForUser(c, targetId, user.id);
+  } else {
+    await loadCommunityComment(c, targetId);
+  }
+
+  const existing = await c.env.DB.prepare(
+    "SELECT id FROM community_reports WHERE reporter_id = ? AND target_type = ? AND target_id = ?"
+  )
+    .bind(user.id, targetType, targetId)
+    .first<{ id: string }>();
+  if (existing) {
+    throw new ApiError(409, "community_report_exists");
+  }
+
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  await c.env.DB.prepare(
+    `INSERT INTO community_reports (
+      id, reporter_id, target_type, target_id, reason, status,
+      reviewer_id, reviewed_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)`
+  )
+    .bind(id, user.id, targetType, targetId, reason, now, now)
+    .run();
+
+  await writeAudit(c, {
+    action: "community.report.create",
+    targetType: `community_${targetType}`,
+    targetId,
+    metadata: { reportId: id, reason }
+  });
+  return c.json({ reportId: id, status: "pending" }, 201);
+});
+
 app.get("/community/volunteer", requireAuth, async (c) => {
   const rows = await c.env.DB.prepare(
     "SELECT id, title, body, contact, image_url, created_at FROM community_volunteer_posts ORDER BY created_at DESC LIMIT 20"
@@ -778,6 +1115,27 @@ app.post("/community/volunteer", requireAuth, async (c) => {
   const volunteerBody = readString(body, "body", { required: true, max: 500 });
   const contact = readString(body, "contact", { max: 160 }) || null;
   const imageUrl = readString(body, "imageUrl", { max: 1000 }) || null;
+  if (imageUrl) {
+    const key = assetKeyFromUrl(imageUrl);
+    if (!key) throw new ApiError(400, "community_image_invalid");
+    const asset = await c.env.DB.prepare(
+      "SELECT owner_id FROM assets WHERE asset_key = ?"
+    )
+      .bind(key)
+      .first<{ owner_id: string }>();
+    if (!asset || asset.owner_id !== admin.id) {
+      throw new ApiError(403, "community_image_not_owned");
+    }
+    const review = await c.env.DB.prepare(
+      "SELECT status FROM upload_reviews WHERE asset_key = ? ORDER BY created_at DESC LIMIT 1"
+    )
+      .bind(key)
+      .first<{ status: string }>();
+    if (review && review.status !== "approved") {
+      throw new ApiError(409, "community_media_not_approved");
+    }
+    await setAssetVisibility(c, key, "public", admin.id);
+  }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
@@ -830,7 +1188,7 @@ app.get("/community/volunteer/applications", requireAuth, async (c) => {
   return c.json({ applications: rows.results.map(serializeCommunityVolunteerApplication) });
 });
 
-app.patch("/community/volunteer/applications/:id", requireAuth, async (c) => {
+const reviewCommunityVolunteerApplicationHandler = async (c: Context<AppEnv>) => {
   const admin = requireAdmin(c);
   const body = await parseJson(c);
   const status = readString(body, "status", { required: true, max: 20 });
@@ -864,7 +1222,10 @@ app.patch("/community/volunteer/applications/:id", requireAuth, async (c) => {
 
   const application = await loadCommunityVolunteerApplication(c, existing.id);
   return c.json({ application: serializeCommunityVolunteerApplication(application) });
-});
+};
+
+app.patch("/community/volunteer/applications/:id", requireAuth, reviewCommunityVolunteerApplicationHandler);
+app.put("/community/volunteer/applications/:id", requireAuth, reviewCommunityVolunteerApplicationHandler);
 
 app.post("/community/volunteer/:id/applications", requireAuth, async (c) => {
   const user = c.get("user");
@@ -944,8 +1305,12 @@ app.post("/memorials", requireAuth, async (c) => {
   return c.json({ memorial: serializeMemorial(requireRow(row)) }, 201);
 });
 
-app.patch("/memorials/:id", requireAuth, async (c) => {
-  const row = await loadMemorial(c, c.req.param("id"));
+const updateMemorialHandler = async (c: Context<AppEnv>) => {
+  const memorialId = c.req.param("id");
+  if (!memorialId) {
+    throw new ApiError(400, "memorial_id_required");
+  }
+  const row = await loadMemorial(c, memorialId);
   const body = await parseJson(c);
   const name = readString(body, "name", { max: 40 }) || row.name;
   const imageUrl = readString(body, "imageUrl", { max: 500 }) || row.image_url;
@@ -960,7 +1325,10 @@ app.patch("/memorials/:id", requireAuth, async (c) => {
     .bind(row.id)
     .first<MemorialRow>();
   return c.json({ memorial: serializeMemorial(requireRow(updated)) });
-});
+};
+
+app.patch("/memorials/:id", requireAuth, updateMemorialHandler);
+app.put("/memorials/:id", requireAuth, updateMemorialHandler);
 
 app.post("/memorials/:id/flowers", requireAuth, async (c) => {
   const row = await loadMemorial(c, c.req.param("id"));
@@ -1035,6 +1403,9 @@ app.post("/memorials/:id/fruits", requireAuth, async (c) => {
   }
 
   if (type === "durian") {
+    if (!readEnvBoolean(c.env.PAYMENT_ENABLED, false)) {
+      throw new ApiError(503, "payment_not_configured");
+    }
     const unlock = await c.env.DB.prepare(
       "SELECT feature FROM feature_unlocks WHERE user_id = ? AND feature = ?"
     )
@@ -1066,7 +1437,8 @@ app.post("/assets", requireAuth, async (c) => {
   return c.json({ asset }, 201);
 });
 
-app.get("/assets/*", async (c) => {
+app.get("/assets/*", requireAuth, async (c) => {
+  const user = c.get("user");
   const key = decodeURIComponent(c.req.path.replace(/^\/assets\//, ""));
   if (!key) {
     throw new ApiError(404, "asset_not_found");
@@ -1081,6 +1453,22 @@ app.get("/assets/*", async (c) => {
     throw new ApiError(404, "asset_not_found");
   }
 
+  const asset = await c.env.DB.prepare(
+    "SELECT owner_id, visibility FROM assets WHERE asset_key = ?"
+  )
+    .bind(key)
+    .first<{ owner_id: string; visibility?: string | null }>();
+  if (!asset) {
+    throw new ApiError(404, "asset_not_found");
+  }
+
+  const ownerAccess = asset.owner_id === user.id || user.role === "admin";
+  const publicAccess = asset.visibility === "public" && review?.status === "approved";
+  if (!ownerAccess && !publicAccess) {
+    // Do not reveal whether a private key exists.
+    throw new ApiError(404, "asset_not_found");
+  }
+
   const object = await c.env.ASSETS.get(key);
   if (!object) {
     throw new ApiError(404, "asset_not_found");
@@ -1089,7 +1477,8 @@ app.get("/assets/*", async (c) => {
   return new Response(object.body, {
     headers: {
       "Content-Type": object.httpMetadata?.contentType || "application/octet-stream",
-      "Cache-Control": "public, max-age=31536000, immutable"
+      "Cache-Control": publicAccess ? "public, max-age=31536000, immutable" : "private, no-store",
+      "X-Content-Type-Options": "nosniff"
     }
   });
 });
@@ -1097,6 +1486,9 @@ app.get("/assets/*", async (c) => {
 app.get("/feature-unlocks/:feature", requireAuth, async (c) => {
   const user = c.get("user");
   const feature = safeScope(c.req.param("feature"));
+  if (isPaidFeature(feature) && !readEnvBoolean(c.env.PAYMENT_ENABLED, false)) {
+    return c.json({ feature, unlocked: false });
+  }
   const row = await c.env.DB.prepare(
     "SELECT feature FROM feature_unlocks WHERE user_id = ? AND feature = ?"
   )
@@ -1106,14 +1498,7 @@ app.get("/feature-unlocks/:feature", requireAuth, async (c) => {
 });
 
 app.post("/feature-unlocks/:feature", requireAuth, async (c) => {
-  const user = c.get("user");
-  const feature = safeScope(c.req.param("feature"));
-  await c.env.DB.prepare(
-    "INSERT OR IGNORE INTO feature_unlocks (user_id, feature, created_at) VALUES (?, ?, ?)"
-  )
-    .bind(user.id, feature, new Date().toISOString())
-    .run();
-  return c.json({ feature, unlocked: true });
+  throw new ApiError(503, "payment_not_configured");
 });
 
 app.get("/ai/profile", requireAuth, async (c) => {
@@ -1129,9 +1514,7 @@ app.patch("/ai/profile", requireAuth, async (c) => {
 });
 
 app.post("/ai/unlock", requireAuth, async (c) => {
-  const current = await loadDefaultAiCompanion(c);
-  const updated = await unlockAiCompanion(c, current.id);
-  return c.json({ profile: serializeAiCompanion(updated) });
+  throw new ApiError(503, "payment_not_configured");
 });
 
 app.post("/ai/assets", requireAuth, async (c) => {
@@ -1170,9 +1553,7 @@ app.patch("/ai/companions/:id", requireAuth, async (c) => {
 });
 
 app.post("/ai/companions/:id/unlock", requireAuth, async (c) => {
-  const companion = await loadAiCompanion(c, c.req.param("id"));
-  const updated = await unlockAiCompanion(c, companion.id);
-  return c.json({ companion: serializeAiCompanion(updated) });
+  throw new ApiError(503, "payment_not_configured");
 });
 
 app.post("/ai/companions/:id/assets", requireAuth, async (c) => {
@@ -1917,7 +2298,21 @@ app.patch("/admin/upload-reviews/:id", requireAuth, async (c) => {
     .run();
 
   if (status === "rejected" || status === "quarantined") {
+    await setAssetVisibility(c, review.asset_key, "private", review.owner_id);
     await queueAssetDelete(c, review.asset_key, review.owner_id, `upload_review_${status}`);
+  } else if (status === "approved") {
+    const profileReference = await c.env.DB.prepare(
+      `SELECT u.id
+       FROM users u
+       JOIN assets a ON a.url = u.avatar_url
+       WHERE a.asset_key = ?
+       LIMIT 1`
+    )
+      .bind(review.asset_key)
+      .first<{ id: string }>();
+    if (profileReference) {
+      await setAssetVisibility(c, review.asset_key, "public", profileReference.id);
+    }
   }
 
   await writeAudit(c, {
@@ -1928,6 +2323,255 @@ app.patch("/admin/upload-reviews/:id", requireAuth, async (c) => {
   });
 
   return c.json({ ok: true });
+});
+
+app.get("/admin/community/moderation", requireAuth, async (c) => {
+  requireAdmin(c);
+  const status = c.req.query("status") || "pending";
+  if (!["pending", "approved", "rejected", "blocked", "all"].includes(status)) {
+    throw new ApiError(400, "invalid_community_moderation_status");
+  }
+
+  const postQuery = `SELECT p.*, u.username, u.display_name, u.avatar_url
+    FROM community_posts p
+    JOIN users u ON u.id = p.user_id
+    ${status === "all" ? "" : "WHERE p.status = ?"}
+    ORDER BY p.created_at DESC LIMIT 200`;
+  const commentQuery = `SELECT cc.*, u.username, u.display_name, u.avatar_url
+    FROM community_post_comments cc
+    JOIN users u ON u.id = cc.user_id
+    ${status === "all" ? "" : "WHERE cc.status = ?"}
+    ORDER BY cc.created_at DESC LIMIT 200`;
+  const posts = status === "all"
+    ? await c.env.DB.prepare(postQuery).all<CommunityPostRow>()
+    : await c.env.DB.prepare(postQuery).bind(status).all<CommunityPostRow>();
+  const comments = status === "all"
+    ? await c.env.DB.prepare(commentQuery).all<CommunityCommentRow>()
+    : await c.env.DB.prepare(commentQuery).bind(status).all<CommunityCommentRow>();
+
+  return c.json({
+    posts: posts.results.map(serializeCommunityPost),
+    comments: comments.results.map(serializeCommunityComment)
+  });
+});
+
+app.patch("/admin/community/posts/:id", requireAuth, async (c) => {
+  const admin = requireAdmin(c);
+  const body = await parseJson(c);
+  const status = readString(body, "status", { required: true, max: 20 });
+  const reason = readString(body, "reason", { max: 300 }) || null;
+  if (!["pending", "approved", "rejected", "blocked"].includes(status)) {
+    throw new ApiError(400, "invalid_community_moderation_status");
+  }
+
+  const post = await c.env.DB.prepare(
+    "SELECT id, user_id, image_urls, status FROM community_posts WHERE id = ?"
+  )
+    .bind(c.req.param("id"))
+    .first<{ id: string; user_id: string; image_urls: string; status: string }>();
+  if (!post) {
+    throw new ApiError(404, "community_post_not_found");
+  }
+
+  if (status === "approved") {
+    for (const url of parseStringArray(post.image_urls || "[]")) {
+      const key = assetKeyFromUrl(url);
+      if (!key) continue;
+      const review = await c.env.DB.prepare(
+        "SELECT status FROM upload_reviews WHERE asset_key = ? ORDER BY created_at DESC LIMIT 1"
+      )
+        .bind(key)
+        .first<{ status: string }>();
+      if (review && review.status !== "approved") {
+        throw new ApiError(409, "community_media_not_approved");
+      }
+    }
+  }
+
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `UPDATE community_posts
+     SET status = ?, moderation_reason = ?, moderated_at = ?, moderated_by = ?, updated_at = ?
+     WHERE id = ?`
+  )
+    .bind(status, reason, now, admin.id, now, post.id)
+    .run();
+
+  const imageUrls = parseStringArray(post.image_urls || "[]");
+  if (status === "approved") {
+    await setCommunityAssetVisibility(c, imageUrls, "public", post.user_id);
+  } else if (status === "rejected" || status === "blocked") {
+    await setCommunityAssetVisibility(c, imageUrls, "private", post.user_id);
+    if (post.status !== status) {
+      for (const url of imageUrls) {
+        const key = assetKeyFromUrl(url);
+        if (key) await queueAssetDelete(c, key, post.user_id, `community_post_${status}`);
+      }
+    }
+  }
+
+  await writeAudit(c, {
+    action: "admin.community.post.moderate",
+    targetType: "community_post",
+    targetId: post.id,
+    metadata: { status, reason }
+  });
+  return c.json({ ok: true, status });
+});
+
+app.patch("/admin/community/comments/:id", requireAuth, async (c) => {
+  const admin = requireAdmin(c);
+  const body = await parseJson(c);
+  const status = readString(body, "status", { required: true, max: 20 });
+  const reason = readString(body, "reason", { max: 300 }) || null;
+  if (!["pending", "approved", "rejected", "blocked"].includes(status)) {
+    throw new ApiError(400, "invalid_community_moderation_status");
+  }
+  const comment = await c.env.DB.prepare(
+    "SELECT id FROM community_post_comments WHERE id = ?"
+  )
+    .bind(c.req.param("id"))
+    .first<{ id: string }>();
+  if (!comment) {
+    throw new ApiError(404, "community_comment_not_found");
+  }
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `UPDATE community_post_comments
+     SET status = ?, moderation_reason = ?, moderated_at = ?, moderated_by = ?, updated_at = ?
+     WHERE id = ?`
+  )
+    .bind(status, reason, now, admin.id, now, comment.id)
+    .run();
+  await writeAudit(c, {
+    action: "admin.community.comment.moderate",
+    targetType: "community_post_comment",
+    targetId: comment.id,
+    metadata: { status, reason }
+  });
+  return c.json({ ok: true, status });
+});
+
+app.get("/admin/community/reports", requireAuth, async (c) => {
+  requireAdmin(c);
+  const status = c.req.query("status") || "pending";
+  if (!["pending", "actioned", "dismissed", "all"].includes(status)) {
+    throw new ApiError(400, "invalid_community_report_status");
+  }
+  const sql = `SELECT r.*, u.username AS reporter_username, u.display_name AS reporter_display_name
+    FROM community_reports r
+    JOIN users u ON u.id = r.reporter_id
+    ${status === "all" ? "" : "WHERE r.status = ?"}
+    ORDER BY r.created_at DESC LIMIT 200`;
+  const rows = status === "all"
+    ? await c.env.DB.prepare(sql).all<CommunityReportRow>()
+    : await c.env.DB.prepare(sql).bind(status).all<CommunityReportRow>();
+  return c.json({ reports: rows.results });
+});
+
+app.patch("/admin/community/reports/:id", requireAuth, async (c) => {
+  const admin = requireAdmin(c);
+  const body = await parseJson(c);
+  const action = readString(body, "action", { required: true, max: 30 });
+  const reason = readString(body, "reason", { max: 300 }) || null;
+  if (!["approve", "remove", "dismiss", "block_user", "ban_user"].includes(action)) {
+    throw new ApiError(400, "invalid_community_report_action");
+  }
+
+  const report = await c.env.DB.prepare("SELECT * FROM community_reports WHERE id = ?")
+    .bind(c.req.param("id"))
+    .first<CommunityReportRow>();
+  if (!report) {
+    throw new ApiError(404, "community_report_not_found");
+  }
+  if (report.status !== "pending") {
+    throw new ApiError(409, "community_report_already_reviewed");
+  }
+
+  let targetUserId: string | null = null;
+  if (report.target_type === "post") {
+    const target = await c.env.DB.prepare(
+      "SELECT id, user_id, image_urls, status FROM community_posts WHERE id = ?"
+    )
+      .bind(report.target_id)
+      .first<{ id: string; user_id: string; image_urls: string; status: string }>();
+    if (!target) throw new ApiError(404, "community_post_not_found");
+    targetUserId = target.user_id;
+    if (action === "approve" || action === "remove") {
+      await moderateCommunityTargetPost(c, admin, target, action === "approve" ? "approved" : "rejected", reason);
+    }
+  } else {
+    const target = await c.env.DB.prepare(
+      "SELECT id, user_id, status FROM community_post_comments WHERE id = ?"
+    )
+      .bind(report.target_id)
+      .first<{ id: string; user_id: string; status: string }>();
+    if (!target) throw new ApiError(404, "community_comment_not_found");
+    targetUserId = target.user_id;
+    if (action === "approve" || action === "remove") {
+      await moderateCommunityTargetComment(c, admin, target, action === "approve" ? "approved" : "rejected", reason);
+    }
+  }
+
+  if ((action === "block_user" || action === "ban_user") && targetUserId) {
+    await setUserModeration(c, admin, targetUserId, action === "ban_user" ? "banned" : "blocked", reason, null);
+  }
+
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    "UPDATE community_reports SET status = ?, reviewer_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?"
+  )
+    .bind(action === "dismiss" ? "dismissed" : "actioned", admin.id, now, now, report.id)
+    .run();
+  await writeAudit(c, {
+    action: "admin.community.report.review",
+    targetType: `community_${report.target_type}`,
+    targetId: report.target_id,
+    metadata: { reportId: report.id, action, reason }
+  });
+  return c.json({ ok: true, status: action === "dismiss" ? "dismissed" : "actioned" });
+});
+
+app.get("/admin/users/moderation", requireAuth, async (c) => {
+  requireAdmin(c);
+  const rows = await c.env.DB.prepare(
+    `SELECT m.*, u.username, u.display_name
+     FROM user_moderation m JOIN users u ON u.id = m.user_id
+     ORDER BY m.updated_at DESC LIMIT 200`
+  ).all<Record<string, unknown>>();
+  return c.json({ users: rows.results });
+});
+
+app.patch("/admin/users/:id/moderation", requireAuth, async (c) => {
+  const admin = requireAdmin(c);
+  const body = await parseJson(c);
+  const status = readString(body, "status", { required: true, max: 20 });
+  const reason = readString(body, "reason", { max: 300 }) || null;
+  const expiresAt = readString(body, "expiresAt", { max: 40 }) || null;
+  if (!["active", "blocked", "banned"].includes(status)) {
+    throw new ApiError(400, "invalid_user_moderation_status");
+  }
+  const target = await c.env.DB.prepare("SELECT id, role FROM users WHERE id = ? AND deleted_at IS NULL")
+    .bind(c.req.param("id"))
+    .first<{ id: string; role: Role }>();
+  if (!target) throw new ApiError(404, "user_not_found");
+  if (target.role === "admin") throw new ApiError(403, "admin_moderation_forbidden");
+  if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
+    throw new ApiError(400, "invalid_moderation_expiry");
+  }
+
+  if (status === "active") {
+    await c.env.DB.prepare("DELETE FROM user_moderation WHERE user_id = ?").bind(target.id).run();
+  } else {
+    await setUserModeration(c, admin, target.id, status as "blocked" | "banned", reason, expiresAt);
+  }
+  await writeAudit(c, {
+    action: "admin.user.moderation",
+    targetType: "user",
+    targetId: target.id,
+    metadata: { status, reason, expiresAt }
+  });
+  return c.json({ ok: true, status });
 });
 
 app.get("/admin/crash-reports", requireAuth, async (c) => {
@@ -2128,7 +2772,7 @@ function corsResponseHeaders(origin?: string) {
     headers.set("Access-Control-Allow-Origin", origin);
     headers.set("Vary", "Origin");
   }
-  headers.set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  headers.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   headers.set(
     "Access-Control-Allow-Headers",
     "Authorization,Content-Type"
@@ -2143,7 +2787,6 @@ function isRateLimitExempt(c: Context<AppEnv>) {
     path === "/health" ||
     path === "/app/config" ||
     path === "/app/digital-human/status" ||
-    path.startsWith("/assets/") ||
     (c.req.method === "GET" && path.startsWith("/legal/"))
   );
 }
@@ -2182,6 +2825,34 @@ async function optionalAuthUser(c: Context<AppEnv>) {
   return verifyToken(c.env, token).catch(() => undefined);
 }
 
+async function assertUserCanUseAccount(c: Context<AppEnv>, user: AuthUser) {
+  // Keep administrators reachable so they can lift a mistaken restriction.
+  if (user.role === "admin") {
+    return;
+  }
+
+  const moderation = await c.env.DB.prepare(
+    "SELECT user_id, status, reason, expires_at, updated_by, updated_at FROM user_moderation WHERE user_id = ?"
+  )
+    .bind(user.id)
+    .first<UserModerationRow>();
+  if (!moderation) {
+    return;
+  }
+
+  const expired = moderation.expires_at && moderation.expires_at <= new Date().toISOString();
+  if (expired) {
+    await c.env.DB.prepare("DELETE FROM user_moderation WHERE user_id = ?").bind(user.id).run();
+    return;
+  }
+
+  throw new ApiError(
+    403,
+    moderation.status === "banned" ? "account_banned" : "account_blocked",
+    { reason: moderation.reason || undefined, expiresAt: moderation.expires_at }
+  );
+}
+
 function getRequestUser(c: Context<AppEnv>) {
   try {
     return c.get("user");
@@ -2196,6 +2867,96 @@ function requireAdmin(c: Context<AppEnv>) {
     throw new ApiError(403, "admin_required");
   }
   return user;
+}
+
+async function moderateCommunityTargetPost(
+  c: Context<AppEnv>,
+  admin: AuthUser,
+  post: { id: string; user_id: string; image_urls: string; status: string },
+  status: "approved" | "rejected" | "blocked",
+  reason: string | null
+) {
+  if (status === "approved") {
+    for (const url of parseStringArray(post.image_urls || "[]")) {
+      const key = assetKeyFromUrl(url);
+      if (!key) continue;
+      const review = await c.env.DB.prepare(
+        "SELECT status FROM upload_reviews WHERE asset_key = ? ORDER BY created_at DESC LIMIT 1"
+      )
+        .bind(key)
+        .first<{ status: string }>();
+      if (review && review.status !== "approved") {
+        throw new ApiError(409, "community_media_not_approved");
+      }
+    }
+  }
+
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `UPDATE community_posts
+     SET status = ?, moderation_reason = ?, moderated_at = ?, moderated_by = ?, updated_at = ?
+     WHERE id = ?`
+  )
+    .bind(status, reason, now, admin.id, now, post.id)
+    .run();
+
+  const imageUrls = parseStringArray(post.image_urls || "[]");
+  if (status === "approved") {
+    await setCommunityAssetVisibility(c, imageUrls, "public", post.user_id);
+  } else {
+    await setCommunityAssetVisibility(c, imageUrls, "private", post.user_id);
+    if (post.status !== status) {
+      for (const url of imageUrls) {
+        const key = assetKeyFromUrl(url);
+        if (key) await queueAssetDelete(c, key, post.user_id, `community_post_${status}`);
+      }
+    }
+  }
+}
+
+async function moderateCommunityTargetComment(
+  c: Context<AppEnv>,
+  admin: AuthUser,
+  comment: { id: string; user_id: string; status: string },
+  status: "approved" | "rejected" | "blocked",
+  reason: string | null
+) {
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `UPDATE community_post_comments
+     SET status = ?, moderation_reason = ?, moderated_at = ?, moderated_by = ?, updated_at = ?
+     WHERE id = ?`
+  )
+    .bind(status, reason, now, admin.id, now, comment.id)
+    .run();
+}
+
+async function setUserModeration(
+  c: Context<AppEnv>,
+  admin: AuthUser,
+  userId: string,
+  status: "blocked" | "banned",
+  reason: string | null,
+  expiresAt: string | null
+) {
+  if (userId === admin.id) {
+    throw new ApiError(400, "cannot_moderate_self");
+  }
+  const now = new Date().toISOString();
+  const query = c.env.DB.dialect === "mysql"
+    ? `INSERT INTO user_moderation (user_id, status, reason, expires_at, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         status = VALUES(status), reason = VALUES(reason), expires_at = VALUES(expires_at),
+         updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)`
+    : `INSERT INTO user_moderation (user_id, status, reason, expires_at, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         status = excluded.status, reason = excluded.reason, expires_at = excluded.expires_at,
+         updated_by = excluded.updated_by, updated_at = excluded.updated_at`;
+  await c.env.DB.prepare(query)
+    .bind(userId, status, reason, expiresAt, admin.id, now)
+    .run();
 }
 
 async function writeAudit(
@@ -2261,6 +3022,145 @@ async function createUploadReview(
     .run();
 }
 
+type CommunityModerationDecision = {
+  status: "approved" | "pending" | "rejected";
+  reason: string | null;
+};
+
+function moderateCommunityText(content: string): CommunityModerationDecision {
+  const normalized = content.toLowerCase().replace(/\s+/g, "");
+  const hardBlockedWords = ["儿童色情", "制作炸弹", "出售枪支", "出售毒品"];
+  const reviewWords = [
+    "诈骗",
+    "赌博",
+    "色情",
+    "暴恐",
+    "枪支",
+    "毒品",
+    "刷单",
+    "博彩",
+    "裸聊",
+    "转账",
+    "加微信"
+  ];
+  const hardBlocked = hardBlockedWords.find((word) => normalized.includes(word));
+  if (hardBlocked) {
+    return { status: "rejected", reason: `blocked_keyword:${hardBlocked}` };
+  }
+  const needsReview = reviewWords.find((word) => normalized.includes(word));
+  if (needsReview) {
+    return { status: "pending", reason: `manual_review_keyword:${needsReview}` };
+  }
+  return { status: "approved", reason: null };
+}
+
+async function moderateCommunityPost(
+  c: Context<AppEnv>,
+  user: AuthUser,
+  content: string,
+  imageUrls: string[]
+): Promise<CommunityModerationDecision> {
+  const textDecision = moderateCommunityText(content);
+  if (textDecision.status === "rejected") {
+    return textDecision;
+  }
+
+  let pending = textDecision.status === "pending";
+  let reason = textDecision.reason;
+  for (const url of imageUrls) {
+    const key = assetKeyFromUrl(url);
+    if (!key) {
+      throw new ApiError(400, "community_image_invalid");
+    }
+    const asset = await c.env.DB.prepare(
+      `SELECT a.owner_id,
+        (SELECT ur.status FROM upload_reviews ur
+          WHERE ur.asset_key = a.asset_key
+          ORDER BY ur.created_at DESC LIMIT 1) AS review_status
+       FROM assets a WHERE a.asset_key = ?`
+    )
+      .bind(key)
+      .first<{ owner_id: string; review_status: string | null }>();
+    if (!asset || asset.owner_id !== user.id) {
+      throw new ApiError(403, "community_image_not_owned");
+    }
+    if (asset.review_status === "rejected" || asset.review_status === "quarantined") {
+      throw new ApiError(422, "community_image_not_approved");
+    }
+    if (asset.review_status !== "approved") {
+      pending = true;
+      reason = reason || "media_manual_review_required";
+    }
+  }
+
+  return {
+    status: pending ? "pending" : "approved",
+    reason
+  };
+}
+
+async function setAssetVisibility(
+  c: Context<AppEnv>,
+  assetKey: string,
+  visibility: "private" | "public",
+  ownerId?: string
+) {
+  const query = ownerId
+    ? "UPDATE assets SET visibility = ? WHERE asset_key = ? AND owner_id = ?"
+    : "UPDATE assets SET visibility = ? WHERE asset_key = ?";
+  const params = ownerId ? [visibility, assetKey, ownerId] : [visibility, assetKey];
+  await c.env.DB.prepare(query).bind(...params).run();
+}
+
+async function prepareProfileAvatar(c: Context<AppEnv>, userId: string, avatarUrl: string | null) {
+  if (!avatarUrl) {
+    return;
+  }
+
+  const assetKey = assetKeyFromUrl(avatarUrl);
+  if (!assetKey) {
+    return;
+  }
+
+  const asset = await c.env.DB.prepare(
+    "SELECT owner_id FROM assets WHERE asset_key = ?"
+  )
+    .bind(assetKey)
+    .first<{ owner_id: string }>();
+  if (!asset) {
+    throw new ApiError(422, "avatar_asset_not_found");
+  }
+  if (asset.owner_id !== userId) {
+    throw new ApiError(403, "avatar_asset_not_owned");
+  }
+
+  const review = await c.env.DB.prepare(
+    "SELECT status FROM upload_reviews WHERE asset_key = ? ORDER BY created_at DESC LIMIT 1"
+  )
+    .bind(assetKey)
+    .first<{ status: string }>();
+  if (review?.status === "rejected" || review?.status === "quarantined") {
+    throw new ApiError(422, "avatar_asset_not_approved");
+  }
+  if (!review || review.status === "approved") {
+    await setAssetVisibility(c, assetKey, "public", userId);
+  }
+}
+
+async function setCommunityAssetVisibility(
+  c: Context<AppEnv>,
+  imageUrls: string[],
+  visibility: "private" | "public",
+  ownerId: string
+) {
+  for (const url of imageUrls) {
+    const key = assetKeyFromUrl(url);
+    if (key) {
+      await setAssetVisibility(c, key, visibility, ownerId);
+    }
+  }
+}
+
 function inspectUpload(mimeType: string, bytes: ArrayBuffer) {
   if (mimeType === "text/plain") {
     const text = decoder.decode(bytes.slice(0, 64 * 1024)).toLowerCase();
@@ -2290,8 +3190,13 @@ async function queueAssetDelete(
 }
 
 async function assetDeleteQueueKeyColumn(c: Context<AppEnv>) {
-  const rows = await c.env.DB.prepare("PRAGMA table_info(asset_delete_queue)").all<{ name: string }>();
-  return rows.results.some((row) => row.name === "asset_key") ? "asset_key" : "r2_key";
+  if (await c.env.DB.hasColumn("asset_delete_queue", "asset_key")) {
+    return "asset_key";
+  }
+  if (await c.env.DB.hasColumn("asset_delete_queue", "r2_key")) {
+    return "r2_key";
+  }
+  return "asset_key";
 }
 
 async function queueUserAssetsForDeletion(c: Context<AppEnv>, userId: string, reason: string) {
@@ -2482,17 +3387,7 @@ function sanitizeWechatName(value: string) {
 
 function normalizeWechatAvatar(value: string) {
   const avatar = value.trim();
-  return /^https?:\/\//i.test(avatar) ? avatar.slice(0, 500) : "";
-}
-
-function roleForUsername(env: Bindings, username: string): Role {
-  const adminNames = new Set(
-    (env.ADMIN_USERNAMES || "admin")
-      .split(",")
-      .map((name) => name.trim().toLowerCase())
-      .filter(Boolean)
-  );
-  return adminNames.has(username.toLowerCase()) ? "admin" : "user";
+  return /^https:\/\//i.test(avatar) ? avatar.slice(0, 500) : "";
 }
 
 async function createToken(env: Bindings, user: AuthUser) {
@@ -2780,6 +3675,8 @@ function serializeCommunityPost(row: CommunityPostRow) {
     likeCount: Number(row.like_count || 0),
     commentCount: Number(row.comment_count || 0),
     likedByMe: Boolean(row.liked_by_me),
+    moderationStatus: row.status || "approved",
+    moderationReason: row.moderation_reason || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -2794,6 +3691,8 @@ function serializeCommunityComment(row: CommunityCommentRow) {
     authorUsername: row.username,
     authorAvatarUrl: row.avatar_url || null,
     content: row.content,
+    moderationStatus: row.status || "approved",
+    moderationReason: row.moderation_reason || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -2894,15 +3793,22 @@ async function loadCommunityPostForUser(c: Context<AppEnv>, postId: string, user
   const row = await c.env.DB.prepare(
     `SELECT p.*, u.username, u.display_name, u.avatar_url,
       (SELECT COUNT(*) FROM community_post_likes l WHERE l.post_id = p.id) AS like_count,
-      (SELECT COUNT(*) FROM community_post_comments cc WHERE cc.post_id = p.id) AS comment_count,
+      (SELECT COUNT(*) FROM community_post_comments cc
+        WHERE cc.post_id = p.id AND cc.status = 'approved') AS comment_count,
       CASE WHEN EXISTS (
         SELECT 1 FROM community_post_likes l WHERE l.post_id = p.id AND l.user_id = ?
       ) THEN 1 ELSE 0 END AS liked_by_me
      FROM community_posts p
      JOIN users u ON u.id = p.user_id
-     WHERE p.id = ?`
+     WHERE p.id = ?
+       AND (
+         p.status = 'approved' OR p.user_id = ? OR EXISTS (
+           SELECT 1 FROM users au
+           WHERE au.id = ? AND au.role = 'admin' AND au.deleted_at IS NULL
+         )
+       )`
   )
-    .bind(userId, postId)
+    .bind(userId, postId, userId, userId)
     .first<CommunityPostRow>();
 
   if (!row) {
@@ -3066,28 +3972,7 @@ async function unlockAiCompanion(c: Context<AppEnv>, id: string) {
 
 async function saveAiCompanion(c: Context<AppEnv>, profile: AiCompanionRow) {
   const updatedAt = new Date().toISOString();
-  await c.env.DB.prepare(
-    `INSERT INTO ai_companions (
-      id, user_id, display_name, gender, relation, avatar_url, smile_avatar_url, avatar_motion_json, paid_unlocked,
-      photo_count, voice_count, moment_count, generated, avatar_style_json, kernel_json, is_default, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      display_name = excluded.display_name,
-      gender = excluded.gender,
-      relation = excluded.relation,
-      avatar_url = excluded.avatar_url,
-      smile_avatar_url = excluded.smile_avatar_url,
-      avatar_motion_json = excluded.avatar_motion_json,
-      paid_unlocked = excluded.paid_unlocked,
-      photo_count = excluded.photo_count,
-      voice_count = excluded.voice_count,
-      moment_count = excluded.moment_count,
-      generated = excluded.generated,
-      avatar_style_json = excluded.avatar_style_json,
-      kernel_json = excluded.kernel_json,
-      is_default = excluded.is_default,
-      updated_at = excluded.updated_at`
-  )
+  await c.env.DB.prepare(saveAiCompanionSql(c.env.DB.dialect))
     .bind(
       profile.id,
       profile.user_id,
@@ -3191,6 +4076,129 @@ function serializeAiMessage(row: AiChatRow) {
     content: row.content,
     createdAt: new Date(row.created_at).getTime()
   };
+}
+
+function digitalHumanChatPersona(id: string): DigitalHumanChatPersona | null {
+  if (id === "grandpa") {
+    return {
+      id,
+      label: "爷爷",
+      address: "孩子",
+      tone: "慈祥、稳重、话不多，但会认真听用户说话；像家里的长辈一样给温暖和生活经验。"
+    };
+  }
+  if (id === "grandma") {
+    return {
+      id,
+      label: "奶奶",
+      address: "孩子",
+      tone: "慈祥、柔和、亲切，有家常感；多安慰、多鼓励，像奶奶坐在身边慢慢说话。"
+    };
+  }
+  return null;
+}
+
+function readDigitalHumanChatHistory(body: Record<string, unknown>): DigitalHumanChatHistoryMessage[] {
+  const raw = body.history;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .slice(-16)
+    .map((item): DigitalHumanChatHistoryMessage | null => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const record = item as Record<string, unknown>;
+      const roleValue = String(record.role || record.sender || "").trim();
+      const role = roleValue === "assistant" || roleValue === "ai" ? "assistant" : roleValue === "user" ? "user" : "";
+      const content = typeof record.content === "string" ? record.content.trim().slice(0, 500) : "";
+      if (!role || !content) {
+        return null;
+      }
+      return { role, content };
+    })
+    .filter((item): item is DigitalHumanChatHistoryMessage => Boolean(item));
+}
+
+function digitalHumanChatModel(env: Bindings) {
+  return env.DIGITAL_HUMAN_CHAT_MODEL?.trim() || "gpt-5.4-mini";
+}
+
+async function requestDigitalHumanChatReply(
+  env: Bindings,
+  persona: DigitalHumanChatPersona,
+  history: DigitalHumanChatHistoryMessage[],
+  content: string
+) {
+  const apiKey = env.AI_API_KEY?.trim();
+  const baseUrl = env.AI_BASE_URL?.trim();
+  if (!apiKey || !baseUrl) {
+    return localDigitalHumanReply(persona, content);
+  }
+
+  const timeoutMs = Number(env.AI_TIMEOUT_MS || "45000");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) ? timeoutMs : 45000);
+
+  try {
+    const response = await fetch(chatCompletionsUrl(baseUrl), {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: digitalHumanChatModel(env),
+        temperature: 0.68,
+        max_tokens: 520,
+        messages: [
+          {
+            role: "system",
+            content:
+              "你是安忆 App 的 2D 数字人陪伴角色。始终使用简体中文回复。回答要像一位慈祥长辈，温暖、克制、自然，不要像客服或说明书。 " +
+              "不要声称自己是真实逝者，也不要编造具体共同回忆。可以安慰、倾听、陪用户整理心情。 " +
+              "如果用户表达自伤、伤人或立即危险，温和建议马上联系可信任的人、当地紧急电话或专业帮助。 " +
+              `当前角色：${persona.label}。称呼用户：${persona.address}。语气设定：${persona.tone}。回复尽量控制在 120 个中文字符内，除非用户要求详细。`
+          },
+          ...history.slice(-12).map((message) => ({
+            role: message.role,
+            content: message.content
+          })),
+          { role: "user", content }
+        ]
+      }),
+      signal: controller.signal
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`digital_human_ai_${response.status}:${text.slice(0, 160)}`);
+    }
+
+    const data = JSON.parse(text) as {
+      choices?: Array<{ message?: { content?: string }; text?: string }>;
+    };
+    const reply = data.choices?.[0]?.message?.content || data.choices?.[0]?.text || "";
+    const cleanReply = reply.trim();
+    if (!cleanReply) {
+      throw new Error("empty_digital_human_reply");
+    }
+    return cleanReply.slice(0, 1800);
+  } catch (error) {
+    console.warn("Digital human chat fallback:", error instanceof Error ? error.message : String(error));
+    return localDigitalHumanReply(persona, content);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function localDigitalHumanReply(persona: DigitalHumanChatPersona, content: string) {
+  const echo = content.length > 18 ? `${content.slice(0, 18)}...` : content;
+  if (persona.id === "grandpa") {
+    return `${persona.address}，爷爷听见了。你说的“${echo}”，先别急，咱们慢慢来。`;
+  }
+  return `${persona.address}，奶奶在呢。你说的“${echo}”，我陪你慢慢说完。`;
 }
 
 async function companionReply(env: Bindings, profile: AiCompanionRow, history: AiChatRow[], content: string) {
@@ -3536,6 +4544,9 @@ function adminPage() {
       <div id="tabs" class="tabs hidden">
         <button class="tab active" data-tab="dashboard" onclick="showTab('dashboard')">概览</button>
         <button class="tab" data-tab="uploads" onclick="showTab('uploads')">上传审核</button>
+        <button class="tab" data-tab="community" onclick="showTab('community')">社区审核</button>
+        <button class="tab" data-tab="reports" onclick="showTab('reports')">举报处理</button>
+        <button class="tab" data-tab="users" onclick="showTab('users')">用户处置</button>
         <button class="tab" data-tab="deletions" onclick="showTab('deletions')">注销申请</button>
         <button class="tab" data-tab="crashes" onclick="showTab('crashes')">崩溃日志</button>
         <button class="tab" data-tab="audit" onclick="showTab('audit')">审计日志</button>
@@ -3559,11 +4570,16 @@ function adminPage() {
       <section id="dashboard" class="tabPanel">
         <div class="grid">
           <div class="card"><div class="muted">待审核上传</div><div id="mUploads" class="metric">0</div></div>
+          <div class="card"><div class="muted">待审社区内容</div><div id="mCommunity" class="metric">0</div></div>
+          <div class="card"><div class="muted">待处理举报</div><div id="mReports" class="metric">0</div></div>
           <div class="card"><div class="muted">崩溃日志</div><div id="mCrashes" class="metric">0</div></div>
           <div class="card"><div class="muted">注销申请</div><div id="mDeletes" class="metric">0</div></div>
         </div>
       </section>
       <section id="uploads" class="tabPanel hidden"><div class="card"><h2>上传内容审核</h2><div class="row"><select id="uploadStatus" onchange="loadUploads()"><option value="pending">pending</option><option value="approved">approved</option><option value="rejected">rejected</option><option value="quarantined">quarantined</option></select></div><div id="uploadsList" class="list" style="margin-top:12px"></div></div></section>
+      <section id="community" class="tabPanel hidden"><div class="card"><h2>社区内容审核</h2><div class="row"><select id="communityStatus" onchange="loadCommunity()"><option value="pending">pending</option><option value="approved">approved</option><option value="rejected">rejected</option><option value="blocked">blocked</option><option value="all">all</option></select></div><div id="communityList" class="list" style="margin-top:12px"></div></div></section>
+      <section id="reports" class="tabPanel hidden"><div class="card"><h2>社区举报处理</h2><div id="reportsList" class="list"></div></div></section>
+      <section id="users" class="tabPanel hidden"><div class="card"><h2>用户处置</h2><div id="moderatedUsersList" class="list"></div></div></section>
       <section id="deletions" class="tabPanel hidden"><div class="card"><h2>账号注销申请</h2><div id="deletionsList" class="list"></div></div></section>
       <section id="crashes" class="tabPanel hidden"><div class="card"><h2>崩溃日志</h2><div id="crashesList" class="list"></div></div></section>
       <section id="audit" class="tabPanel hidden"><div class="card"><h2>审计日志</h2><div id="auditList" class="list"></div></div></section>
@@ -3573,7 +4589,7 @@ function adminPage() {
 <script>
 var token = localStorage.getItem('anyi_admin_token') || '';
 var currentUser = JSON.parse(localStorage.getItem('anyi_admin_user') || 'null');
-var cache = { uploads: [], crashes: [], deletions: [], audit: [], assetDeletes: [] };
+var cache = { uploads: [], community: {posts:[],comments:[]}, reports: [], users: [], crashes: [], deletions: [], audit: [], assetDeletes: [] };
 
 function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function authHeaders(extra){ var h = Object.assign({'Authorization':'Bearer ' + token}, extra || {}); return h; }
@@ -3610,17 +4626,31 @@ function showTab(name){
   document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active', x.dataset.tab === name);});
   document.querySelectorAll('.tabPanel').forEach(function(x){x.classList.toggle('hidden', x.id !== name);});
   if(name === 'uploads') loadUploads();
+  if(name === 'community') loadCommunity();
+  if(name === 'reports') loadReports();
+  if(name === 'users') loadModeratedUsers();
   if(name === 'deletions') loadDeletions();
   if(name === 'crashes') loadCrashes();
   if(name === 'audit') loadAudit();
   if(name === 'assetDeletes') loadAssetDeletes();
 }
-async function refreshAll(){ await Promise.all([loadUploads(), loadCrashes(), loadDeletions(), loadAudit(), loadAssetDeletes()]).catch(function(e){console.warn(e);}); renderMetrics(); }
-function renderMetrics(){ mUploads.textContent=cache.uploads.length; mCrashes.textContent=cache.crashes.length; mDeletes.textContent=cache.deletions.length; }
+async function refreshAll(){ await Promise.all([loadUploads(), loadCommunity(), loadReports(), loadModeratedUsers(), loadCrashes(), loadDeletions(), loadAudit(), loadAssetDeletes()]).catch(function(e){console.warn(e);}); renderMetrics(); }
+function renderMetrics(){ mUploads.textContent=cache.uploads.length; mCommunity.textContent=(cache.community.posts||[]).length+(cache.community.comments||[]).length; mReports.textContent=cache.reports.length; mCrashes.textContent=cache.crashes.length; mDeletes.textContent=cache.deletions.length; }
 
 async function loadUploads(){ var d=await api('/admin/upload-reviews?status='+encodeURIComponent(uploadStatus.value)); cache.uploads=d.reviews||[]; renderUploads(); renderMetrics(); }
 function renderUploads(){ uploadsList.innerHTML = cache.uploads.map(function(r){return '<div class="card"><div><b>'+esc(r.mime_type)+'</b> <span class="pill">'+esc(r.status)+'</span></div><div class="muted">'+esc(r.asset_key)+' · '+esc(r.size_bytes)+' bytes</div><div class="row"><button class="good" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'approved\\')">通过</button><button class="danger" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'rejected\\')">拒绝</button><button class="secondary" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'quarantined\\')">隔离</button></div></div>';}).join('') || '<div class="muted">暂无记录</div>'; }
 async function reviewUpload(id,status){ var reason = status === 'approved' ? '' : prompt('原因', status) || status; await api('/admin/upload-reviews/'+id,{method:'PATCH',body:JSON.stringify({status:status,reason:reason})}); await loadUploads(); }
+
+async function loadCommunity(){ var d=await api('/admin/community/moderation?status='+encodeURIComponent(communityStatus.value)); cache.community=d||{posts:[],comments:[]}; renderCommunity(); renderMetrics(); }
+function renderCommunity(){ var html=(cache.community.posts||[]).map(function(r){return '<div class="card"><b>动态</b> <span class="pill">'+esc(r.moderationStatus||r.status)+'</span><div class="muted">'+esc(r.authorName||r.authorUsername||'')+' · '+esc(r.createdAt||'')+'</div><p>'+esc(r.content||'')+'</p><div class="row"><button class="good" onclick="moderatePost(\\''+esc(r.id)+'\\',\\'approved\\')">通过</button><button class="danger" onclick="moderatePost(\\''+esc(r.id)+'\\',\\'rejected\\')">拒绝</button><button class="secondary" onclick="moderatePost(\\''+esc(r.id)+'\\',\\'blocked\\')">屏蔽</button></div></div>';}).join(''); html+=(cache.community.comments||[]).map(function(r){return '<div class="card"><b>评论</b> <span class="pill">'+esc(r.moderationStatus||r.status)+'</span><div class="muted">'+esc(r.authorName||r.authorUsername||'')+' · '+esc(r.createdAt||'')+'</div><p>'+esc(r.content||'')+'</p><div class="row"><button class="good" onclick="moderateComment(\\''+esc(r.id)+'\\',\\'approved\\')">通过</button><button class="danger" onclick="moderateComment(\\''+esc(r.id)+'\\',\\'rejected\\')">拒绝</button><button class="secondary" onclick="moderateComment(\\''+esc(r.id)+'\\',\\'blocked\\')">屏蔽</button></div></div>';}).join(''); communityList.innerHTML=html||'<div class="muted">暂无社区内容</div>'; }
+async function moderatePost(id,status){ var reason=status==='approved'?'':prompt('原因',status)||status; await api('/admin/community/posts/'+id,{method:'PATCH',body:JSON.stringify({status:status,reason:reason})}); await loadCommunity(); }
+async function moderateComment(id,status){ var reason=status==='approved'?'':prompt('原因',status)||status; await api('/admin/community/comments/'+id,{method:'PATCH',body:JSON.stringify({status:status,reason:reason})}); await loadCommunity(); }
+
+async function loadReports(){ var d=await api('/admin/community/reports?status=pending'); cache.reports=d.reports||[]; reportsList.innerHTML=cache.reports.map(function(r){return '<div class="card"><b>'+esc(r.target_type)+'</b> <span class="pill">'+esc(r.status)+'</span><div class="muted">举报人：'+esc(r.reporter_display_name||r.reporter_username||'')+' · '+esc(r.created_at)+'</div><p>'+esc(r.reason)+'</p><div class="row"><button class="good" onclick="reviewReport(\\''+esc(r.id)+'\\',\\'approve\\')">保留</button><button class="danger" onclick="reviewReport(\\''+esc(r.id)+'\\',\\'remove\\')">移除</button><button class="secondary" onclick="reviewReport(\\''+esc(r.id)+'\\',\\'dismiss\\')">驳回举报</button><button class="danger" onclick="reviewReport(\\''+esc(r.id)+'\\',\\'block_user\\')">屏蔽用户</button></div></div>';}).join('')||'<div class="muted">暂无待处理举报</div>'; renderMetrics(); }
+async function reviewReport(id,action){ var reason=prompt('处理备注',action)||action; await api('/admin/community/reports/'+id,{method:'PATCH',body:JSON.stringify({action:action,reason:reason})}); await loadReports(); await loadCommunity(); }
+
+async function loadModeratedUsers(){ var d=await api('/admin/users/moderation'); cache.users=d.users||[]; moderatedUsersList.innerHTML=cache.users.map(function(r){return '<div class="card"><b>'+esc(r.display_name||r.username)+'</b> <span class="pill">'+esc(r.status)+'</span><div class="muted">'+esc(r.username)+' · '+esc(r.updated_at)+'</div><p>'+esc(r.reason||'')+'</p><button class="good" onclick="unblockUser(\\''+esc(r.user_id)+'\\')">解除处置</button></div>';}).join('')||'<div class="muted">暂无被处置用户</div>'; }
+async function unblockUser(id){ await api('/admin/users/'+id+'/moderation',{method:'PATCH',body:JSON.stringify({status:'active'})}); await loadModeratedUsers(); }
 
 async function loadDeletions(){ var d=await api('/admin/account-deletion-requests'); cache.deletions=d.requests||[]; renderDeletions(); renderMetrics(); }
 function renderDeletions(){ deletionsList.innerHTML = cache.deletions.map(function(r){return '<div class="card"><b>'+esc(r.username)+'</b> <span class="pill">'+esc(r.status)+'</span><div class="muted">'+esc(r.contact||'')+' · '+esc(r.created_at)+'</div><p>'+esc(r.reason||'')+'</p><select onchange="setDeletionStatus(\\''+esc(r.id)+'\\',this.value)"><option>更新状态</option><option value="processing">processing</option><option value="completed">completed</option><option value="rejected">rejected</option></select></div>';}).join('') || '<div class="muted">暂无申请</div>'; }

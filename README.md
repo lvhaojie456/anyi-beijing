@@ -9,7 +9,7 @@
 - Android 包名：`com.anyi.memorial`
 - App 默认连接：`https://api.anyibj.cn`
 - 后端：腾讯云 CVM 上运行 Node.js + Hono 服务
-- 数据库：服务器本机 SQLite，默认路径 `/var/lib/anyi-memorial-api/anyi.sqlite`
+- 数据库：服务器本机 MySQL，数据库名默认 `anyi_memorial`；SQLite 文件仅保留作迁移回滚备份
 - 上传文件：服务器本机目录，默认路径 `/var/lib/anyi-memorial-api/uploads`
 - Web 管理后台：`https://api.anyibj.cn/admin`
 - 2D 数字人：默认由 `GET /app/config` 下发，当前指向 `https://api.anyibj.cn/vtuber/`；服务状态可查 `GET /app/digital-human/status`

@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "安忆主模块",
+  "main": "",
+  "author": "安忆",
+  "license": "Proprietary",
+  "dependencies": {}
+}

@@ -7,8 +7,8 @@
 - Android 后端地址：通过 `-PANYI_API_BASE_URL=...` 注入 `BuildConfig.API_BASE_URL`
 - 默认 API 地址：`https://api.anyibj.cn`
 - Release 签名入口：通过 `ANYI_RELEASE_*` 环境变量配置，不提交 keystore
-- 后端骨架：账号、管理员、纪念馆、订单、聊天、验收图片、护符商城、支付回调、文件上传
-- 数据库迁移：`backend/migrations/*.sql`
+- 后端骨架：账号、管理员、纪念馆、订单、聊天、验收图片、护符商城、文件上传；支付接口默认关闭
+- 数据库迁移：SQLite 使用 `backend/migrations/*.sql`，MySQL 使用 `backend/migrations-mysql/*.sql`
 - 腾讯云部署文档：`backend/TENCENT_DEPLOY.md`
 - 隐私政策、用户协议、AI 免责声明模板
 
@@ -61,14 +61,14 @@ pending_payment -> pending_order -> accepted -> in_progress -> pending_acceptanc
 
 - 注册、登录、退出、注销
 - 管理员账号是否正确进入 Web 后台
-- 普通用户创建远程礼祭订单并支付成功
+- 普通用户创建远程礼祭订单，并确认未配置真实支付时不会误报支付成功
 - 管理员查看所有订单、接单、推进、上传验收图片
 - 用户在验收图片后确认完成
 - 订单内用户和管理员互发消息
 - 纪念馆献花、点蜡烛、上香、供品限制
 - 图片/语音上传失败、权限拒绝、网络断开
 - 文件删除队列处理
-- 重复支付、回调延迟、金额不一致
+- 接入真实支付后的重复支付、回调延迟、金额不一致
 - 深色模式、不同屏幕尺寸、首次安装和升级安装
 - Release AAB 安装、崩溃日志、隐私弹窗、测试账号
 
@@ -78,5 +78,5 @@ pending_payment -> pending_order -> accepted -> in_progress -> pending_acceptanc
 - 支付签名校验必须接真实微信支付或支付宝官方流程。
 - 隐私政策必须覆盖头像、纪念照片、语音、聊天、订单、支付信息。
 - AI 陪伴如果未接真实 AI，商店描述必须明确“演示功能”或“暂未接入真实 AI”。
-- SQLite 数据库和上传目录必须配置定时备份。
+- MySQL 数据库和上传目录必须配置定时备份。
 - 管理后台建议独立成后台域名，App 内仅保留入口。

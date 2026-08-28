@@ -34,6 +34,10 @@ node_modules/
 backend/backups/
 output/
 tmp/
+.tmp/
+screenshots/
+window-current.xml
+__pycache__/
 temp_generated_assets/
 resume_render/
 *.sqlite
@@ -61,3 +65,7 @@ generated-smile-*.png
 app-open-check.png
 anyi-open-check.png
 anyi-open-latest.png
+
+# Root-level visual QA exports (product assets live under app/, website/, or harmonyos/)
+/anyi-*.png
+/app-*.png

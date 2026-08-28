@@ -33,7 +33,25 @@ class AnyiApiClient(
         return request(method = "GET", path = "/app/digital-human/status")
     }
 
-    fun register(username: String, password: String, displayName: String): JSONObject {
+    fun digitalHumanChat(characterId: String, message: String, history: JSONArray): JSONObject {
+        return request(
+            method = "POST",
+            path = "/app/digital-human/chat",
+            authorized = true,
+            body = JSONObject()
+                .put("characterId", characterId)
+                .put("message", message)
+                .put("history", history)
+        )
+    }
+
+    fun register(
+        username: String,
+        password: String,
+        displayName: String,
+        acceptedTerms: Boolean,
+        acceptedPrivacy: Boolean
+    ): JSONObject {
         return request(
             method = "POST",
             path = "/auth/register",
@@ -41,6 +59,8 @@ class AnyiApiClient(
                 .put("username", username)
                 .put("password", password)
                 .put("displayName", displayName)
+                .put("acceptedTerms", acceptedTerms)
+                .put("acceptedPrivacy", acceptedPrivacy)
         )
     }
 
@@ -54,11 +74,14 @@ class AnyiApiClient(
         )
     }
 
-    fun loginWithWechat(code: String): JSONObject {
+    fun loginWithWechat(code: String, acceptedTerms: Boolean, acceptedPrivacy: Boolean): JSONObject {
         return request(
             method = "POST",
             path = "/auth/wechat",
-            body = JSONObject().put("code", code)
+            body = JSONObject()
+                .put("code", code)
+                .put("acceptedTerms", acceptedTerms)
+                .put("acceptedPrivacy", acceptedPrivacy)
         )
     }
 
@@ -120,6 +143,18 @@ class AnyiApiClient(
 
     fun deleteCommunityPostComment(postId: String, commentId: String): JSONObject {
         return request(method = "DELETE", path = "/community/posts/$postId/comments/$commentId", authorized = true)
+    }
+
+    fun reportCommunityContent(targetType: String, targetId: String, reason: String): JSONObject {
+        return request(
+            method = "POST",
+            path = "/community/reports",
+            authorized = true,
+            body = JSONObject()
+                .put("targetType", targetType)
+                .put("targetId", targetId)
+                .put("reason", reason)
+        )
     }
 
     fun communityVolunteerInfo(): JSONObject {
@@ -267,128 +302,6 @@ class AnyiApiClient(
         return request(method = "POST", path = "/feature-unlocks/$feature", authorized = true)
     }
 
-    fun aiProfile(): JSONObject {
-        return request(method = "GET", path = "/ai/profile", authorized = true).getJSONObject("profile")
-    }
-
-    fun listAiCompanions(): JSONArray {
-        return request(method = "GET", path = "/ai/companions", authorized = true).getJSONArray("companions")
-    }
-
-    fun createAiCompanion(
-        displayName: String,
-        gender: String,
-        relation: String,
-        avatarStyleJson: String? = null,
-        kernelJson: String? = null
-    ): JSONObject {
-        val body = JSONObject()
-            .put("displayName", displayName)
-            .put("gender", gender)
-            .put("relation", relation)
-        if (!avatarStyleJson.isNullOrBlank()) {
-            body.put("avatarStyleJson", avatarStyleJson)
-        }
-        if (!kernelJson.isNullOrBlank()) {
-            body.put("kernelJson", kernelJson)
-        }
-        return request(
-            method = "POST",
-            path = "/ai/companions",
-            authorized = true,
-            body = body
-        ).getJSONObject("companion")
-    }
-
-    fun updateAiCompanion(
-        companionId: String,
-        displayName: String,
-        gender: String,
-        relation: String,
-        generated: Boolean? = null,
-        avatarStyleJson: String? = null,
-        kernelJson: String? = null
-    ): JSONObject {
-        val body = JSONObject()
-            .put("displayName", displayName)
-            .put("gender", gender)
-            .put("relation", relation)
-        if (generated != null) {
-            body.put("generated", generated)
-        }
-        if (!avatarStyleJson.isNullOrBlank()) {
-            body.put("avatarStyleJson", avatarStyleJson)
-        }
-        if (!kernelJson.isNullOrBlank()) {
-            body.put("kernelJson", kernelJson)
-        }
-        return request(method = "PATCH", path = "/ai/companions/$companionId", authorized = true, body = body)
-            .getJSONObject("companion")
-    }
-
-    fun updateAiProfile(gender: String, relation: String, generated: Boolean? = null): JSONObject {
-        val body = JSONObject()
-            .put("gender", gender)
-            .put("relation", relation)
-        if (generated != null) {
-            body.put("generated", generated)
-        }
-        return request(method = "PATCH", path = "/ai/profile", authorized = true, body = body)
-            .getJSONObject("profile")
-    }
-
-    fun unlockAi(): JSONObject {
-        return request(method = "POST", path = "/ai/unlock", authorized = true).getJSONObject("profile")
-    }
-
-    fun unlockAiCompanion(companionId: String): JSONObject {
-        return request(method = "POST", path = "/ai/companions/$companionId/unlock", authorized = true)
-            .getJSONObject("companion")
-    }
-
-    fun uploadAiAsset(kind: String, fileName: String, mimeType: String, bytes: ByteArray): JSONObject {
-        return multipartRequest(
-            path = "/ai/assets",
-            fields = mapOf("kind" to kind),
-            files = listOf(UploadPayload(fileName, mimeType, bytes))
-        )
-    }
-
-    fun uploadAiCompanionAsset(companionId: String, kind: String, fileName: String, mimeType: String, bytes: ByteArray): JSONObject {
-        return multipartRequest(
-            path = "/ai/companions/$companionId/assets",
-            fields = mapOf("kind" to kind),
-            files = listOf(UploadPayload(fileName, mimeType, bytes))
-        )
-    }
-
-    fun listAiMessages(): JSONArray {
-        return request(method = "GET", path = "/ai/messages", authorized = true).getJSONArray("messages")
-    }
-
-    fun listAiMessages(companionId: String): JSONArray {
-        return request(method = "GET", path = "/ai/companions/$companionId/messages", authorized = true)
-            .getJSONArray("messages")
-    }
-
-    fun sendAiMessage(content: String): JSONArray {
-        return request(
-            method = "POST",
-            path = "/ai/messages",
-            authorized = true,
-            body = JSONObject().put("content", content)
-        ).getJSONArray("messages")
-    }
-
-    fun sendAiMessage(companionId: String, content: String): JSONArray {
-        return request(
-            method = "POST",
-            path = "/ai/companions/$companionId/messages",
-            authorized = true,
-            body = JSONObject().put("content", content)
-        ).getJSONArray("messages")
-    }
-
     private fun request(
         method: String,
         path: String,
@@ -414,6 +327,9 @@ class AnyiApiClient(
 
     private fun openConnection(currentBaseUrl: String, path: String, method: String, authorized: Boolean): HttpURLConnection {
         val url = URL("${currentBaseUrl.trimEnd('/')}$path")
+        if (!BuildConfig.DEBUG && url.protocol != "https") {
+            throw IOException("cleartext_api_blocked")
+        }
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15_000
@@ -504,10 +420,8 @@ class AnyiApiClient(
 
     private fun readTimeoutFor(path: String, method: String): Int {
         return when {
-            path == "/ai/messages" && method == "POST" -> 65_000
-            path.startsWith("/ai/companions/") && path.endsWith("/messages") && method == "POST" -> 65_000
-            path == "/assets" || path == "/ai/assets" || path.endsWith("/acceptance") -> 120_000
-            path.startsWith("/ai/companions/") && path.endsWith("/assets") -> 240_000
+            path == "/assets" || path.endsWith("/acceptance") -> 120_000
+            path == "/app/digital-human/chat" -> 60_000
             else -> 30_000
         }
     }
@@ -522,7 +436,10 @@ class AnyiApiClient(
         } else {
             listOf(primary.trim().trimEnd('/')) + configured
         }
-        return candidates.distinct().ifEmpty { listOf(primary.trim().trimEnd('/')) }
+        val secureCandidates = candidates
+            .distinct()
+            .filter { BuildConfig.DEBUG || it.startsWith("https://") }
+        return secureCandidates.ifEmpty { listOf(primary.trim().trimEnd('/')) }
     }
 }
 

@@ -4,7 +4,8 @@
 
 - API 逻辑复用 `src/index.ts`
 - 运行入口是 `server/server.ts`
-- 数据库是本机 SQLite：`/var/lib/anyi-memorial-api/anyi.sqlite`
+- 数据库是本机 MySQL：`127.0.0.1:3306/anyi_memorial`
+- SQLite 文件 `/var/lib/anyi-memorial-api/anyi.sqlite` 仅在迁移观察期保留作回滚备份
 - 上传文件保存在本机目录：`/var/lib/anyi-memorial-api/uploads`
 - Nginx 反向代理到本机 `127.0.0.1:8787`
 - APK 下载文件由 Nginx 静态托管：`/var/www/anyi-downloads`
@@ -36,6 +37,14 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs build-essential
 ```
 
+安装 MySQL：
+
+```bash
+sudo apt update
+sudo apt install -y mysql-server
+sudo systemctl enable --now mysql
+```
+
 安装依赖并编译：
 
 ```bash
@@ -55,11 +64,19 @@ nano .env
 至少修改：
 
 ```text
+HOST=127.0.0.1
 AUTH_SECRET=replace-with-a-long-random-secret
-ADMIN_USERNAMES=admin
+DB_DRIVER=mysql
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_USER=anyi_api
+MYSQL_PASSWORD=replace-with-mysql-password
+MYSQL_DATABASE=anyi_memorial
+ANYI_MYSQL_MIGRATIONS_DIR=/opt/anyiapp2/backend/migrations-mysql
 ANYI_DATA_DIR=/var/lib/anyi-memorial-api
 PUBLIC_ASSET_BASE_URL=https://api.anyibj.cn
-ALLOWED_ORIGINS=https://api.anyibj.cn,http://api.anyibj.cn
+ALLOWED_ORIGINS=https://api.anyibj.cn
+PAYMENT_ENABLED=false
 ```
 
 生成随机 `AUTH_SECRET`：
@@ -108,7 +125,7 @@ sudo cp /opt/anyiapp2/AnyiMemorial-test-v1.0.7-code9-image-upload-fix-20260528-2
 sudo chown -R www-data:www-data /var/www/anyi-downloads
 ```
 
-如果证书还没准备好，先用 HTTP 配置测试：
+HTTP 配置只负责跳转到 HTTPS；证书准备好后再对外提供服务：
 
 ```bash
 sudo cp /opt/anyiapp2/backend/examples/tencent-nginx-node-api-http.conf /etc/nginx/sites-available/anyi-api
@@ -116,7 +133,7 @@ sudo ln -sf /etc/nginx/sites-available/anyi-api /etc/nginx/sites-enabled/anyi-ap
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
-curl http://api.anyibj.cn/health
+curl -I http://api.anyibj.cn/health
 ```
 
 证书申请成功后换成 HTTPS 配置：
@@ -141,10 +158,16 @@ $env:JAVA_HOME='D:\0\android studio\jbr'
 
 ## 8. 备份
 
-SQLite 数据库和上传目录都在 `/var/lib/anyi-memorial-api`，建议每天备份：
+生产主库是 MySQL，上传目录在 `/var/lib/anyi-memorial-api/uploads`。部署备份脚本和定时器：
 
 ```bash
-sudo tar -czf /opt/anyi-backup-$(date +%F).tar.gz /var/lib/anyi-memorial-api
+sudo cp /opt/anyiapp2/backend/scripts/anyi-mysql-backup.sh /usr/local/bin/anyi-mysql-backup
+sudo chmod 750 /usr/local/bin/anyi-mysql-backup
+sudo cp /opt/anyiapp2/backend/examples/anyi-mysql-backup.service /etc/systemd/system/anyi-mysql-backup.service
+sudo cp /opt/anyiapp2/backend/examples/anyi-mysql-backup.timer /etc/systemd/system/anyi-mysql-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now anyi-mysql-backup.timer
+sudo systemctl start anyi-mysql-backup.service
 ```
 
-建议再把备份同步到腾讯云 COS 或另一台服务器。
+备份目录默认是 `/home/ubuntu/anyi-db-backups`，保留 14 天。建议再把备份同步到腾讯云 COS 或另一台服务器。

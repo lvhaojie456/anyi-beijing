@@ -10,7 +10,7 @@ val apiBaseUrls = providers.gradleProperty("ANYI_API_BASE_URLS")
     .orElse(apiBaseUrl)
     .get()
 val wechatAppId = providers.gradleProperty("ANYI_WECHAT_APP_ID")
-    .orElse("")
+    .orElse("wx4ecdbc92d71a7ac8")
     .get()
 
 fun buildConfigString(value: String): String {
