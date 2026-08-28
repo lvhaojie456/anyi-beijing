@@ -10,6 +10,7 @@
 - 文件删除策略：账号注销或审核拒绝会写入 `asset_delete_queue`，管理员可统一处理本地上传文件删除。
 - 崩溃日志：App 未捕获异常会上报 `/crash-reports`，管理员可查 `/admin/crash-reports`。
 - 账号注销申请：网页表单写入 `account_deletion_requests`，管理员可查 `/admin/account-deletion-requests`。
+- AI 长期记忆：默认关闭，按用户和陪伴角色隔离；仅保存经过敏感信息过滤的候选事实，并提供单条删除和全部清空。
 
 ## 数据备份
 
@@ -53,4 +54,5 @@ POST /admin/asset-delete-queue/process
 - 保持 `LEGAL_CONTACT_EMAIL` 和 `LEGAL_CONTACT_PHONE` 为真实客服信息。
 - 支付回调必须接入真实微信支付或支付宝官方验签。
 - 后续接入图片和语音内容安全服务，把 `upload_reviews` 从人工待审升级为自动审核加人工复核。
+- AI 记忆上线前应定期检查提取准确率、误记忆、忘记指令和跨账号隔离；记忆表随 MySQL 备份一起恢复。
 - 管理后台建议继续强化：权限分级、登录失败锁定、双因素验证、操作导出。

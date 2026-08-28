@@ -33,7 +33,7 @@ class AnyiApiClient(
         return request(method = "GET", path = "/app/digital-human/status")
     }
 
-    fun digitalHumanChat(characterId: String, message: String, history: JSONArray): JSONObject {
+    fun digitalHumanChat(characterId: String, message: String): JSONObject {
         return request(
             method = "POST",
             path = "/app/digital-human/chat",
@@ -41,7 +41,67 @@ class AnyiApiClient(
             body = JSONObject()
                 .put("characterId", characterId)
                 .put("message", message)
-                .put("history", history)
+        )
+    }
+
+    fun listDigitalHumanMessages(characterId: String): JSONArray {
+        return request(
+            method = "GET",
+            path = "/app/digital-human/messages?characterId=$characterId",
+            authorized = true
+        ).getJSONArray("messages")
+    }
+
+    fun listDigitalHumanMemories(characterId: String): JSONArray {
+        return request(
+            method = "GET",
+            path = "/app/digital-human/memories?characterId=$characterId",
+            authorized = true
+        ).getJSONArray("memories")
+    }
+
+    fun digitalHumanMemorySettings(): JSONObject {
+        return request(
+            method = "GET",
+            path = "/app/digital-human/memory-settings",
+            authorized = true
+        )
+    }
+
+    fun setDigitalHumanMemoryEnabled(enabled: Boolean): JSONObject {
+        return request(
+            method = "PUT",
+            path = "/app/digital-human/memory-settings",
+            authorized = true,
+            body = JSONObject().put("enabled", enabled)
+        )
+    }
+
+    fun createDigitalHumanMemory(characterId: String, content: String, memoryType: String = "fact"): JSONObject {
+        return request(
+            method = "POST",
+            path = "/app/digital-human/memories",
+            authorized = true,
+            body = JSONObject()
+                .put("characterId", characterId)
+                .put("content", content)
+                .put("memoryType", memoryType)
+        ).getJSONObject("memory")
+    }
+
+    fun deleteDigitalHumanMemory(memoryId: String): JSONObject {
+        return request(
+            method = "DELETE",
+            path = "/app/digital-human/memories/$memoryId",
+            authorized = true
+        )
+    }
+
+    fun deleteAllDigitalHumanMemories(characterId: String): JSONObject {
+        return request(
+            method = "DELETE",
+            path = "/app/digital-human/memories?characterId=$characterId",
+            authorized = true
         )
     }
 

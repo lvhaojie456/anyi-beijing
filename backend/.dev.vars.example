@@ -7,6 +7,7 @@ RATE_LIMIT_ENABLED=true
 AI_BASE_URL=https://your-ai-provider.example
 AI_API_KEY=replace-with-ai-api-key
 AI_MODEL=gpt-5.4-mini
+AI_MEMORY_MODEL=gpt-5.4-mini
 AI_IMAGE_BASE_URL=https://api.openai.com
 AI_IMAGE_API_KEY=replace-with-image-api-key
 AI_IMAGE_MODEL=gpt-image-1

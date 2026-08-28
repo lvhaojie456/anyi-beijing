@@ -3,6 +3,8 @@ import { http } from '@kit.NetworkKit';
 import { API_BASE_URLS, MAX_IMAGE_BYTES } from '../common/Constants';
 import {
   ApiErrorPayload,
+  AiMemoriesResponse,
+  AiMemorySettingsResponse,
   AppConfigResponse,
   AssetResponse,
   AuthResponse,
@@ -13,7 +15,7 @@ import {
   CommunityPostsResponse,
   CommunityVolunteerResponse,
   DigitalHumanChatResponse,
-  DigitalHumanMessage,
+  DigitalHumanMessagesResponse,
   FlowerResponse,
   FruitResponse,
   HealthResponse,
@@ -62,15 +64,9 @@ interface ContentPayload {
   content: string;
 }
 
-interface DigitalHumanHistoryItem {
-  sender: string;
-  content: string;
-}
-
 interface DigitalHumanPayload {
   characterId: string;
   message: string;
-  history: Array<DigitalHumanHistoryItem>;
 }
 
 interface VolunteerApplicationPayload {
@@ -254,15 +250,45 @@ export class AnyiApiClient {
       `/community/volunteer/applications/${applicationId}`, payload, true);
   }
 
-  digitalHumanChat(characterId: string, message: string,
-    messages: Array<DigitalHumanMessage>): Promise<DigitalHumanChatResponse> {
-    const history: Array<DigitalHumanHistoryItem> = messages.slice(-12).map((item: DigitalHumanMessage) => {
-      const value: DigitalHumanHistoryItem = { sender: item.sender, content: item.content };
-      return value;
-    });
-    const payload: DigitalHumanPayload = { characterId, message, history };
+  digitalHumanChat(characterId: string, message: string): Promise<DigitalHumanChatResponse> {
+    const payload: DigitalHumanPayload = { characterId, message };
     return this.request<DigitalHumanChatResponse>(http.RequestMethod.POST,
       '/app/digital-human/chat', payload, true, 60000);
+  }
+
+  listDigitalHumanMessages(characterId: string): Promise<DigitalHumanMessagesResponse> {
+    return this.request<DigitalHumanMessagesResponse>(http.RequestMethod.GET,
+      `/app/digital-human/messages?characterId=${characterId}`, undefined, true);
+  }
+
+  listDigitalHumanMemories(characterId: string): Promise<AiMemoriesResponse> {
+    return this.request<AiMemoriesResponse>(http.RequestMethod.GET,
+      `/app/digital-human/memories?characterId=${characterId}`, undefined, true);
+  }
+
+  digitalHumanMemorySettings(): Promise<AiMemorySettingsResponse> {
+    return this.request<AiMemorySettingsResponse>(http.RequestMethod.GET,
+      '/app/digital-human/memory-settings', undefined, true);
+  }
+
+  setDigitalHumanMemoryEnabled(enabled: boolean): Promise<AiMemorySettingsResponse> {
+    return this.request<AiMemorySettingsResponse>(http.RequestMethod.PUT,
+      '/app/digital-human/memory-settings', { enabled }, true);
+  }
+
+  deleteAllDigitalHumanMemories(characterId: string): Promise<OkResponse> {
+    return this.request<OkResponse>(http.RequestMethod.DELETE,
+      `/app/digital-human/memories?characterId=${characterId}`, undefined, true);
+  }
+
+  deleteDigitalHumanMemory(memoryId: string): Promise<OkResponse> {
+    return this.request<OkResponse>(http.RequestMethod.DELETE,
+      `/app/digital-human/memories/${memoryId}`, undefined, true);
+  }
+
+  deleteAllDigitalHumanMemories(characterId: string): Promise<OkResponse> {
+    return this.request<OkResponse>(http.RequestMethod.DELETE,
+      `/app/digital-human/memories?characterId=${characterId}`, undefined, true);
   }
 
   async uploadImage(scope: string, uri: string): Promise<AssetResponse> {

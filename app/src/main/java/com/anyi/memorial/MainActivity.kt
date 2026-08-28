@@ -113,6 +113,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
@@ -845,6 +846,17 @@ private data class DigitalHumanMessage(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+private data class AiMemory(
+    val id: String,
+    val memoryType: String,
+    val memoryKey: String,
+    val content: String,
+    val importance: Int,
+    val confidence: Float,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
 private val digitalHumanCharacters = listOf(
     DigitalHumanCharacter(id = "grandpa", label = "爷爷", imageResId = R.drawable.anyi_digital_grandpa),
     DigitalHumanCharacter(id = "grandma", label = "奶奶", imageResId = R.drawable.anyi_digital_grandma)
@@ -860,37 +872,142 @@ private fun initialDigitalHumanMessages(character: DigitalHumanCharacter): List<
     return emptyList()
 }
 
-private fun digitalHumanHistoryJson(messages: List<DigitalHumanMessage>): JSONArray {
-    val history = JSONArray()
-    messages.takeLast(12).forEach { message ->
-        history.put(
-            JSONObject()
-                .put("role", if (message.sender == "user") "user" else "assistant")
-                .put("content", message.content)
-        )
-    }
-    return history
-}
-
 @Composable
 private fun DigitalHumanCompanionScreen(user: AppUser) {
     val api = remember(user.token) { AnyiApiClient(tokenProvider = { user.token }) }
     val scope = rememberCoroutineScope()
     var selectedCharacterId by rememberSaveable { mutableStateOf(digitalHumanCharacters.first().id) }
-    var digitalHumanChats by remember { mutableStateOf(emptyMap<String, List<DigitalHumanMessage>>()) }
+    var digitalHumanChats by remember(user.token) { mutableStateOf(emptyMap<String, List<DigitalHumanMessage>>()) }
+    var loadedCharacterIds by remember(user.token) { mutableStateOf(emptySet<String>()) }
+    var digitalHumanMemories by remember(user.token) { mutableStateOf(emptyMap<String, List<AiMemory>>()) }
+    var loadedMemoryCharacterIds by remember(user.token) { mutableStateOf(emptySet<String>()) }
     var digitalHumanDrafts by remember { mutableStateOf(emptyMap<String, String>()) }
     var sendingChatCharacterId by remember { mutableStateOf<String?>(null) }
+    var showMemoryDialog by rememberSaveable { mutableStateOf(false) }
+    var showClearMemoryConfirm by rememberSaveable { mutableStateOf(false) }
+    var memoryLoading by remember { mutableStateOf(false) }
+    var memoryMessage by remember { mutableStateOf("") }
+    var memoryEnabled by remember(user.token) { mutableStateOf(false) }
+    var memorySettingsLoaded by remember(user.token) { mutableStateOf(false) }
     val selectedCharacter = digitalHumanCharacters.firstOrNull { it.id == selectedCharacterId }
         ?: digitalHumanCharacters.first()
     val selectedMessages = digitalHumanChats[selectedCharacter.id]
         ?: initialDigitalHumanMessages(selectedCharacter)
     val selectedDraft = digitalHumanDrafts[selectedCharacter.id].orEmpty()
 
+    LaunchedEffect(user.token, selectedCharacter.id) {
+        val characterId = selectedCharacter.id
+        if (!loadedCharacterIds.contains(characterId)) {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { api.listDigitalHumanMessages(characterId) }
+            }
+            val messages = result.getOrNull()?.let(::parseDigitalHumanMessages).orEmpty()
+            digitalHumanChats = digitalHumanChats + (
+                characterId to (messages.ifEmpty { initialDigitalHumanMessages(selectedCharacter) })
+            )
+            loadedCharacterIds = loadedCharacterIds + characterId
+        }
+        if (!loadedMemoryCharacterIds.contains(characterId)) {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { api.listDigitalHumanMemories(characterId) }
+            }
+            digitalHumanMemories = digitalHumanMemories + (
+                characterId to (result.getOrNull()?.let(::parseAiMemories).orEmpty())
+            )
+            loadedMemoryCharacterIds = loadedMemoryCharacterIds + characterId
+        }
+    }
+
+    LaunchedEffect(user.token) {
+        runCatching {
+            withContext(Dispatchers.IO) { api.digitalHumanMemorySettings() }
+        }.onSuccess { settings ->
+            memoryEnabled = settings.optBoolean("enabled", false)
+            memorySettingsLoaded = true
+        }.onFailure {
+            memorySettingsLoaded = true
+        }
+    }
+
     fun updateDraft(characterId: String, value: String) {
         digitalHumanDrafts = digitalHumanDrafts + (characterId to value.take(500))
     }
 
-    fun sendLocalDigitalHumanChat() {
+    fun refreshMemories(characterId: String) {
+        memoryLoading = true
+        memoryMessage = ""
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { api.listDigitalHumanMemories(characterId) }
+            }
+            result
+                .onSuccess { memories ->
+                    digitalHumanMemories = digitalHumanMemories + (characterId to parseAiMemories(memories))
+                    loadedMemoryCharacterIds = loadedMemoryCharacterIds + characterId
+                }
+                .onFailure { memoryMessage = it.userFriendlyMessage("读取记忆失败") }
+            memoryLoading = false
+        }
+    }
+
+    fun openMemoryDialog() {
+        showMemoryDialog = true
+        refreshMemories(selectedCharacter.id)
+    }
+
+    fun setMemoryEnabled(enabled: Boolean) {
+        memoryLoading = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { api.setDigitalHumanMemoryEnabled(enabled) }
+            }
+            result
+                .onSuccess { settings ->
+                    memoryEnabled = settings.optBoolean("enabled", enabled)
+                    memoryMessage = if (memoryEnabled) "长期记忆已开启" else "长期记忆已关闭"
+                }
+                .onFailure { memoryMessage = it.userFriendlyMessage("设置记忆失败") }
+            memoryLoading = false
+        }
+    }
+
+    fun deleteMemory(memory: AiMemory) {
+        memoryLoading = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { api.deleteDigitalHumanMemory(memory.id) }
+            }
+            result
+                .onSuccess {
+                    val current = digitalHumanMemories[selectedCharacter.id].orEmpty()
+                    digitalHumanMemories = digitalHumanMemories + (
+                        selectedCharacter.id to current.filterNot { it.id == memory.id }
+                    )
+                    memoryMessage = "记忆已删除"
+                }
+                .onFailure { memoryMessage = it.userFriendlyMessage("删除记忆失败") }
+            memoryLoading = false
+        }
+    }
+
+    fun deleteAllMemories() {
+        memoryLoading = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { api.deleteAllDigitalHumanMemories(selectedCharacter.id) }
+            }
+            result
+                .onSuccess {
+                    digitalHumanMemories = digitalHumanMemories + (selectedCharacter.id to emptyList())
+                    memoryMessage = "该角色的记忆已清空"
+                    showClearMemoryConfirm = false
+                }
+                .onFailure { memoryMessage = it.userFriendlyMessage("清空记忆失败") }
+            memoryLoading = false
+        }
+    }
+
+    fun sendDigitalHumanChat() {
         val character = selectedCharacter
         if (character.imageResId == null || sendingChatCharacterId != null) return
         val content = selectedDraft.trim()
@@ -905,8 +1022,7 @@ private fun DigitalHumanCompanionScreen(user: AppUser) {
                 withContext(Dispatchers.IO) {
                     api.digitalHumanChat(
                         characterId = character.id,
-                        message = content,
-                        history = digitalHumanHistoryJson(priorMessages)
+                        message = content
                     )
                 }
             }
@@ -927,6 +1043,20 @@ private fun DigitalHumanCompanionScreen(user: AppUser) {
                 }
             val currentMessages = digitalHumanChats[character.id] ?: (priorMessages + userMessage)
             digitalHumanChats = digitalHumanChats + (character.id to (currentMessages + assistantMessage))
+            val responseMemories = result.getOrNull()
+                ?.optJSONArray("memories")
+                ?.let(::parseAiMemories)
+                .orEmpty()
+            if (responseMemories.isNotEmpty()) {
+                val currentMemories = digitalHumanMemories[character.id].orEmpty()
+                val merged = (currentMemories + responseMemories)
+                    .associateBy { it.id }
+                    .values
+                    .toList()
+                digitalHumanMemories = digitalHumanMemories + (character.id to merged)
+                memoryMessage = "已更新 ${responseMemories.size} 条记忆"
+            }
+            loadedMemoryCharacterIds = loadedMemoryCharacterIds + character.id
             if (sendingChatCharacterId == character.id) {
                 sendingChatCharacterId = null
             }
@@ -940,7 +1070,8 @@ private fun DigitalHumanCompanionScreen(user: AppUser) {
             chatDraft = selectedDraft,
             chatSending = sendingChatCharacterId == selectedCharacter.id,
             onChatDraftChange = { updateDraft(selectedCharacter.id, it) },
-            onSendChat = ::sendLocalDigitalHumanChat,
+            onSendChat = ::sendDigitalHumanChat,
+            onOpenMemory = ::openMemoryDialog,
             modifier = Modifier.fillMaxSize()
         )
 
@@ -954,6 +1085,43 @@ private fun DigitalHumanCompanionScreen(user: AppUser) {
                 .padding(top = 10.dp)
         )
 
+    }
+
+    if (showMemoryDialog) {
+        AiMemoryDialog(
+            character = selectedCharacter,
+            memories = digitalHumanMemories[selectedCharacter.id].orEmpty(),
+            memoryEnabled = memoryEnabled,
+            memorySettingsLoaded = memorySettingsLoaded,
+            loading = memoryLoading,
+            message = memoryMessage,
+            onDismiss = { showMemoryDialog = false },
+            onDelete = ::deleteMemory,
+            onClear = { showClearMemoryConfirm = true },
+            onMemoryEnabledChange = ::setMemoryEnabled
+        )
+    }
+
+    if (showClearMemoryConfirm) {
+        AlertDialog(
+            onDismissRequest = { if (!memoryLoading) showClearMemoryConfirm = false },
+            containerColor = Paper,
+            shape = RoundedCornerShape(8.dp),
+            title = { Text("清空长期记忆") },
+            text = { Text("确定清空${selectedCharacter.label}的全部长期记忆吗？") },
+            confirmButton = {
+                Button(
+                    onClick = ::deleteAllMemories,
+                    enabled = !memoryLoading,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB42318))
+                ) { Text("清空") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearMemoryConfirm = false }, enabled = !memoryLoading) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
@@ -1043,6 +1211,7 @@ private fun LocalDigitalHumanStage(
     chatSending: Boolean,
     onChatDraftChange: (String) -> Unit,
     onSendChat: () -> Unit,
+    onOpenMemory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val imageResId = character.imageResId ?: return
@@ -1105,6 +1274,7 @@ private fun LocalDigitalHumanStage(
             sending = chatSending,
             onDraftChange = onChatDraftChange,
             onSend = onSendChat,
+            onOpenMemory = onOpenMemory,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 14.dp, vertical = 12.dp)
@@ -1120,6 +1290,7 @@ private fun DigitalHumanChatPanel(
     sending: Boolean,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
+    onOpenMemory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val visibleMessages = messages.takeLast(8)
@@ -1154,6 +1325,18 @@ private fun DigitalHumanChatPanel(
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 14.sp
                 )
+                TextButton(
+                    onClick = onOpenMemory,
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("记忆", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
             LazyColumn(
                 modifier = Modifier
@@ -1231,6 +1414,172 @@ private fun DigitalHumanChatBubble(message: DigitalHumanMessage) {
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
             )
         }
+    }
+}
+
+@Composable
+private fun AiMemoryDialog(
+    character: DigitalHumanCharacter,
+    memories: List<AiMemory>,
+    memoryEnabled: Boolean,
+    memorySettingsLoaded: Boolean,
+    loading: Boolean,
+    message: String,
+    onDismiss: () -> Unit,
+    onDelete: (AiMemory) -> Unit,
+    onClear: () -> Unit,
+    onMemoryEnabledChange: (Boolean) -> Unit
+) {
+    Dialog(onDismissRequest = { if (!loading) onDismiss() }) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            color = Paper,
+            shape = RoundedCornerShape(16.dp),
+            shadowElevation = 14.dp
+        ) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${character.label}的记忆",
+                            color = Ink,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text("聊天记录之外的长期记忆", color = Muted, fontSize = 12.sp)
+                    }
+                    IconButton(onClick = onDismiss, enabled = !loading) {
+                        Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Muted)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("长期记忆开关", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (memoryEnabled) "已开启" else "已关闭",
+                            color = Muted,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Switch(
+                        checked = memoryEnabled,
+                        onCheckedChange = onMemoryEnabledChange,
+                        enabled = !loading && memorySettingsLoaded
+                    )
+                }
+                Text(
+                    text = "仅在开启后整理对话中的重要信息。",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                Spacer(Modifier.height(10.dp))
+
+                if (loading && memories.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = Green)
+                    }
+                } else if (memories.isEmpty()) {
+                    Text(
+                        text = "还没有保存的记忆",
+                        color = Muted,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 28.dp)
+                    )
+                } else {
+                    val memoryListHeight = (memories.size * 112).coerceIn(112, 330).dp
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(memoryListHeight),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(memories, key = { it.id }) { memory ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = aiMemoryTypeLabel(memory.memoryType),
+                                        color = Green,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(Modifier.height(3.dp))
+                                    Text(
+                                        text = memory.content,
+                                        color = Ink,
+                                        fontSize = 14.sp,
+                                        lineHeight = 19.sp,
+                                        maxLines = 4,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { onDelete(memory) },
+                                    enabled = !loading,
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Delete,
+                                        contentDescription = "删除记忆",
+                                        tint = Color(0xFFB42318),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (message.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(message, color = Muted, fontSize = 12.sp)
+                }
+                if (memories.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onClear,
+                        enabled = !loading,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = AppButtonShape,
+                        border = BorderStroke(1.dp, Color(0xFFB42318).copy(alpha = 0.35f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFB42318))
+                    ) {
+                        Icon(Icons.Rounded.Delete, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text("清空长期记忆", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun aiMemoryTypeLabel(type: String): String {
+    return when (type) {
+        "profile" -> "个人信息"
+        "preference" -> "偏好"
+        "event" -> "重要日子"
+        "boundary" -> "边界"
+        "story" -> "故事"
+        else -> "记忆"
     }
 }
 
@@ -6832,6 +7181,38 @@ private fun Context.persistReadPermission(uri: Uri) {
     }
 }
 
+private fun parseDigitalHumanMessages(array: JSONArray?): List<DigitalHumanMessage> {
+    if (array == null) return emptyList()
+    return List(array.length()) { index ->
+        val item = array.optJSONObject(index) ?: JSONObject()
+        DigitalHumanMessage(
+            sender = if (item.optString("sender") == "user") "user" else "assistant",
+            content = item.optString("content"),
+            createdAt = item.optLong("createdAt").takeIf { it > 0L }
+                ?: parseTimeMillis(item.optString("created_at"))
+        )
+    }.filter { it.content.isNotBlank() }
+}
+
+private fun parseAiMemories(array: JSONArray?): List<AiMemory> {
+    if (array == null) return emptyList()
+    return List(array.length()) { index ->
+        val item = array.optJSONObject(index) ?: JSONObject()
+        AiMemory(
+            id = item.optString("id"),
+            memoryType = item.optString("memoryType", "fact"),
+            memoryKey = item.optString("memoryKey"),
+            content = item.optString("content"),
+            importance = item.optInt("importance", 50),
+            confidence = item.optDouble("confidence", 0.75).toFloat(),
+            createdAt = item.optLong("createdAt").takeIf { it > 0L }
+                ?: parseTimeMillis(item.optString("created_at")),
+            updatedAt = item.optLong("updatedAt").takeIf { it > 0L }
+                ?: parseTimeMillis(item.optString("updated_at"))
+        )
+    }.filter { it.id.isNotBlank() && it.content.isNotBlank() }
+}
+
 private fun parseStringArray(array: JSONArray?): List<String> {
     if (array == null) return emptyList()
     return List(array.length()) { index -> array.optString(index) }.filter { it.isNotBlank() }
@@ -7031,6 +7412,10 @@ private fun Throwable.userFriendlyMessage(fallback: String): String {
         code.contains("wechat_login_not_configured") -> "微信登录还没配置 AppID 和 AppSecret"
         code.contains("wechat_code_invalid") -> "微信授权已失效，请重新点微信登录"
         code.contains("wechat_userinfo_failed") -> "微信资料获取失败，请稍后重试"
+        code.contains("ai_memory_sensitive_not_saved") -> "这类敏感信息不会被保存为 AI 记忆"
+        code.contains("ai_memory_not_found") -> "这条记忆已经不存在"
+        code.contains("ai_memory_id_invalid") -> "记忆编号无效"
+        code.contains("ai_memory_type_invalid") -> "记忆类型无效"
         code.contains("community_post_delete_forbidden") -> "只能删除自己发布的动态"
         code.contains("community_comment_delete_forbidden") -> "只能删除自己动态下的评论"
         code.contains("community_content_rejected") -> "内容未通过审核，请修改后再发布"

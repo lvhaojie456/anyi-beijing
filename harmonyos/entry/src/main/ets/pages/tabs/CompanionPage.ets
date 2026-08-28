@@ -19,6 +19,8 @@ export struct CompanionPage {
   @State private draft: string = '';
   @State private sending: boolean = false;
   @State private message: string = '';
+  @State private memoryEnabled: boolean = false;
+  @State private memoryCount: number = 0;
   @State private webMode: boolean = false;
   @State private digitalHumanUrl: string = DEFAULT_DIGITAL_HUMAN_URL;
 
@@ -33,6 +35,9 @@ export struct CompanionPage {
       this.messages = this.initialMessages('grandpa');
     }
     this.loadConfig();
+    this.loadMessages('grandpa');
+    this.loadMemorySettings();
+    this.loadMemories('grandpa');
   }
 
   private api(): AnyiApiClient {
@@ -62,6 +67,53 @@ export struct CompanionPage {
     }];
   }
 
+  private async loadMessages(characterId: string): Promise<void> {
+    try {
+      const response = await this.api().listDigitalHumanMessages(characterId);
+      if (this.selectedCharacterId !== characterId) {
+        return;
+      }
+      this.messages = response.messages.length > 0 ? response.messages : this.initialMessages(characterId);
+    } catch (error) {
+      if (this.selectedCharacterId === characterId) {
+        this.messages = this.initialMessages(characterId);
+        this.message = userFriendlyError(error as Error, '聊天记录暂时没有加载');
+      }
+    }
+  }
+
+  private async loadMemorySettings(): Promise<void> {
+    try {
+      const response = await this.api().digitalHumanMemorySettings();
+      this.memoryEnabled = response.enabled;
+    } catch (_) {
+      this.memoryEnabled = false;
+    }
+  }
+
+  private async loadMemories(characterId: string): Promise<void> {
+    try {
+      const response = await this.api().listDigitalHumanMemories(characterId);
+      if (this.selectedCharacterId === characterId) {
+        this.memoryCount = response.memories.length;
+      }
+    } catch (_) {
+      if (this.selectedCharacterId === characterId) {
+        this.memoryCount = 0;
+      }
+    }
+  }
+
+  private async toggleMemory(): Promise<void> {
+    try {
+      const response = await this.api().setDigitalHumanMemoryEnabled(!this.memoryEnabled);
+      this.memoryEnabled = response.enabled;
+      this.message = this.memoryEnabled ? '长期记忆已开启' : '长期记忆已关闭';
+    } catch (error) {
+      this.message = userFriendlyError(error as Error, '设置长期记忆失败');
+    }
+  }
+
   private selectCharacter(id: string): void {
     if (this.selectedCharacterId === id || this.sending) {
       return;
@@ -70,6 +122,8 @@ export struct CompanionPage {
     this.messages = this.initialMessages(id);
     this.draft = '';
     this.message = '';
+    this.loadMessages(id);
+    this.loadMemories(id);
   }
 
   private async send(): Promise<void> {
@@ -83,14 +137,14 @@ export struct CompanionPage {
       content,
       createdAt: Date.now()
     };
-    const history: Array<DigitalHumanMessage> = this.messages;
     this.messages = this.messages.concat([userMessage]);
     this.draft = '';
     this.sending = true;
     this.message = '';
     try {
-      const response = await this.api().digitalHumanChat(this.selectedCharacterId, content, history);
+      const response = await this.api().digitalHumanChat(this.selectedCharacterId, content);
       this.messages = this.messages.concat([response.message]);
+      this.loadMemories(this.selectedCharacterId);
     } catch (error) {
       this.draft = content;
       this.message = userFriendlyError(error as Error, '陪伴回复暂时没有送达');
@@ -180,6 +234,12 @@ export struct CompanionPage {
             .fontColor(COLORS.green)
             .backgroundColor(COLORS.greenLight)
             .onClick(() => this.webMode = true)
+          Button(this.memoryEnabled ? `记忆 ${this.memoryCount}` : '开启记忆')
+            .height(38)
+            .fontSize(13)
+            .fontColor(COLORS.green)
+            .backgroundColor(this.memoryEnabled ? COLORS.amberLight : COLORS.greenLight)
+            .onClick(() => this.toggleMemory())
         }
         .width('100%')
 

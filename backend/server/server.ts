@@ -54,6 +54,7 @@ const env = {
   AI_BASE_URL: process.env.AI_BASE_URL || "",
   AI_API_KEY: process.env.AI_API_KEY || "",
   AI_MODEL: process.env.AI_MODEL || "",
+  AI_MEMORY_MODEL: process.env.AI_MEMORY_MODEL || "",
   AI_IMAGE_BASE_URL: process.env.AI_IMAGE_BASE_URL || "",
   AI_IMAGE_API_KEY: process.env.AI_IMAGE_API_KEY || "",
   AI_IMAGE_MODEL: process.env.AI_IMAGE_MODEL || "",

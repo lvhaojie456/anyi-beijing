@@ -32,6 +32,9 @@
 - `GET /ai/companions`、`POST /ai/companions`、`PATCH /ai/companions/:id`：AI 陪伴对象
 - `POST /ai/companions/:id/assets`：AI 素材上传
 - `GET /ai/companions/:id/messages`、`POST /ai/companions/:id/messages`：AI 聊天
+- `GET /app/digital-human/messages`：按爷爷/奶奶角色恢复云端聊天记录
+- `GET /app/digital-human/memories`、`POST /app/digital-human/memories`、`DELETE /app/digital-human/memories`、`DELETE /app/digital-human/memories/:id`：查看、添加和清理私有 AI 长期记忆
+- `GET /app/digital-human/memory-settings`、`PUT /app/digital-human/memory-settings`：读取和更新长期记忆开关，默认关闭
 - `POST /crash-reports`：App 崩溃日志上报
 - `GET /admin`：Web 管理后台
 - `GET /admin/audit-logs`：审计日志
@@ -41,7 +44,7 @@
 - `GET /admin/account-deletion-requests`、`PATCH /admin/account-deletion-requests/:id`：账号注销申请
 - `GET /app/config`：App 运行配置，下发 2D 数字人入口地址和开关
 - `GET /app/digital-human/status`：检查 2D 数字人页面是否可用
-- `POST /app/digital-human/chat`：爷爷/奶奶 2D 数字人聊天，默认模型 `gpt-5.4-mini`
+- `POST /app/digital-human/chat`：爷爷/奶奶 2D 数字人聊天，服务端持久化历史并检索长期记忆，默认模型 `gpt-5.4-mini`
 
 ## 本地开发
 
@@ -71,6 +74,7 @@ PAYMENT_ENABLED=false
 VTUBER_URL=https://api.anyibj.cn/vtuber/
 VTUBER_ENABLED=true
 DIGITAL_HUMAN_CHAT_MODEL=gpt-5.4-mini
+AI_MEMORY_MODEL=gpt-5.4-mini
 ```
 
 ## 腾讯云部署

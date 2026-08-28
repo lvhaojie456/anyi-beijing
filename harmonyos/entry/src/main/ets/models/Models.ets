@@ -184,10 +184,37 @@ export interface DigitalHumanMessage {
   createdAt: number;
 }
 
+export interface AiMemory {
+  id: string;
+  companionKey: string;
+  memoryType: string;
+  memoryKey: string;
+  content: string;
+  confidence: number;
+  importance: number;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number | null;
+}
+
+export interface DigitalHumanMessagesResponse {
+  messages: Array<DigitalHumanMessage>;
+}
+
+export interface AiMemoriesResponse {
+  memories: Array<AiMemory>;
+}
+
+export interface AiMemorySettingsResponse {
+  enabled: boolean;
+  consentedAt?: string | null;
+}
+
 export interface DigitalHumanChatResponse {
   characterId: string;
   model: string;
   message: DigitalHumanMessage;
+  memories?: Array<AiMemory>;
 }
 
 export interface DigitalHumanConfig {

@@ -71,6 +71,7 @@ pending_payment -> pending_order -> accepted -> in_progress -> pending_acceptanc
 - 接入真实支付后的重复支付、回调延迟、金额不一致
 - 深色模式、不同屏幕尺寸、首次安装和升级安装
 - Release AAB 安装、崩溃日志、隐私弹窗、测试账号
+- 开启长期记忆后验证跨次启动恢复；验证查看、单条删除、清空全部、明确“忘记”和敏感信息过滤
 
 ## 上线前不可省略
 
@@ -79,4 +80,5 @@ pending_payment -> pending_order -> accepted -> in_progress -> pending_acceptanc
 - 隐私政策必须覆盖头像、纪念照片、语音、聊天、订单、支付信息。
 - AI 陪伴如果未接真实 AI，商店描述必须明确“演示功能”或“暂未接入真实 AI”。
 - MySQL 数据库和上传目录必须配置定时备份。
+- AI 长期记忆必须支持用户查看、单条删除、清空全部，并在账号注销时一并删除。
 - 管理后台建议独立成后台域名，App 内仅保留入口。

@@ -13,6 +13,7 @@
 - 上传文件：服务器本机目录，默认路径 `/var/lib/anyi-memorial-api/uploads`
 - Web 管理后台：`https://api.anyibj.cn/admin`
 - 2D 数字人：默认由 `GET /app/config` 下发，当前指向 `https://api.anyibj.cn/vtuber/`；服务状态可查 `GET /app/digital-human/status`
+- AI 长期记忆：默认关闭；用户开启后按角色保存聊天历史和明确表达的偏好/重要信息，可在 App 内查看或清空
 - 官网：`website/` 静态文件，可部署到腾讯云 CVM Nginx 或腾讯云静态网站托管
 
 ## Android 调试
