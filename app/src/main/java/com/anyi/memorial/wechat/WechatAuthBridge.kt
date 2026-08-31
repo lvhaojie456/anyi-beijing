@@ -1,6 +1,8 @@
 package com.anyi.memorial.wechat
 
 import android.app.Activity
+import android.content.pm.PackageManager
+import android.os.Build
 import com.anyi.memorial.BuildConfig
 import com.tencent.mm.opensdk.modelbase.BaseResp
 import com.tencent.mm.opensdk.modelmsg.SendAuth
@@ -12,6 +14,7 @@ sealed class WechatAuthResult {
 }
 
 object WechatAuthBridge {
+    private const val WechatPackageName = "com.tencent.mm"
     private var callback: ((WechatAuthResult) -> Unit)? = null
 
     fun isConfigured(): Boolean = BuildConfig.WECHAT_APP_ID.isNotBlank()
@@ -25,8 +28,16 @@ object WechatAuthBridge {
 
         val api = WXAPIFactory.createWXAPI(activity.applicationContext, appId, true)
         api.registerApp(appId)
+        if (!isWechatPackageInstalled(activity.packageManager)) {
+            onResult(
+                WechatAuthResult.Failure(
+                    "当前设备未检测到微信，请确认微信安装在同一台设备和同一用户中"
+                )
+            )
+            return false
+        }
         if (!api.isWXAppInstalled) {
-            onResult(WechatAuthResult.Failure("手机未安装微信，暂时不能使用微信登录"))
+            onResult(WechatAuthResult.Failure("当前微信安装包未通过官方签名校验，请安装官方微信"))
             return false
         }
 
@@ -41,6 +52,20 @@ object WechatAuthBridge {
             onResult(WechatAuthResult.Failure("微信登录唤起失败，请稍后重试"))
         }
         return sent
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isWechatPackageInstalled(packageManager: PackageManager): Boolean {
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(
+                    WechatPackageName,
+                    PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                packageManager.getPackageInfo(WechatPackageName, 0)
+            }
+        }.isSuccess
     }
 
     fun handleResp(resp: BaseResp) {

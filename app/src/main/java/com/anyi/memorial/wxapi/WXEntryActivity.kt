@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import com.anyi.memorial.BuildConfig
+import com.anyi.memorial.privacy.PrivacyConsentStore
 import com.anyi.memorial.wechat.WechatAuthBridge
 import com.tencent.mm.opensdk.modelbase.BaseReq
 import com.tencent.mm.opensdk.modelbase.BaseResp
@@ -30,6 +31,10 @@ class WXEntryActivity : Activity(), IWXAPIEventHandler {
     }
 
     private fun handleWechatIntent(intent: Intent?) {
+        if (!PrivacyConsentStore.isAccepted(this)) {
+            finish()
+            return
+        }
         val appId = BuildConfig.WECHAT_APP_ID
         if (appId.isBlank()) {
             finish()

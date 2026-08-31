@@ -1,13 +1,13 @@
 package com.anyi.memorial.network
 
 import com.anyi.memorial.BuildConfig
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.DataOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class UploadPayload(
     val fileName: String,
@@ -19,6 +19,15 @@ class AnyiApiClient(
     private val baseUrl: String = BuildConfig.API_BASE_URL,
     private val tokenProvider: () -> String? = { null }
 ) {
+    companion object {
+        @Volatile
+        private var unauthorizedHandler: (() -> Unit)? = null
+
+        fun setUnauthorizedHandler(handler: (() -> Unit)?) {
+            unauthorizedHandler = handler
+        }
+    }
+
     private val baseUrls = apiBaseUrls(baseUrl)
 
     fun health(): JSONObject {
@@ -29,79 +38,135 @@ class AnyiApiClient(
         return request(method = "GET", path = "/app/config")
     }
 
-    fun digitalHumanStatus(): JSONObject {
-        return request(method = "GET", path = "/app/digital-human/status")
+    fun listAiCompanions(): JSONArray {
+        return request(method = "GET", path = "/ai/companions", authorized = true)
+            .getJSONArray("companions")
     }
 
-    fun digitalHumanChat(characterId: String, message: String): JSONObject {
+    fun createAiCompanion(
+        displayName: String,
+        relation: String
+    ): JSONObject {
+        require(displayName.isNotBlank()) { "ai_companion_name_required" }
+        require(relation.isNotBlank()) { "ai_companion_relation_required" }
         return request(
             method = "POST",
-            path = "/app/digital-human/chat",
+            path = "/ai/companions",
             authorized = true,
             body = JSONObject()
-                .put("characterId", characterId)
-                .put("message", message)
+                .put("displayName", displayName)
+                .put("relation", relation)
         )
     }
 
-    fun listDigitalHumanMessages(characterId: String): JSONArray {
+    fun updateAiCompanion(
+        companionId: String,
+        displayName: String,
+        relation: String
+    ): JSONObject {
+        require(displayName.isNotBlank()) { "ai_companion_name_required" }
+        require(relation.isNotBlank()) { "ai_companion_relation_required" }
+        return request(
+            method = "PATCH",
+            path = "/ai/companions/$companionId",
+            authorized = true,
+            body = JSONObject()
+                .put("displayName", displayName)
+                .put("relation", relation)
+        )
+    }
+
+    fun deleteAiCompanion(companionId: String): JSONObject {
+        return request(
+            method = "DELETE",
+            path = "/ai/companions/$companionId",
+            authorized = true
+        )
+    }
+
+    fun updateAiCompanionChatBackground(companionId: String, backgroundUrl: String?): JSONObject {
+        return request(
+            method = "PATCH",
+            path = "/ai/companions/$companionId/background",
+            authorized = true,
+            body = JSONObject().put("backgroundUrl", backgroundUrl)
+        )
+    }
+
+    fun uploadAiCompanionChatBackground(companionId: String, file: UploadPayload): JSONObject {
+        return multipartRequest(
+            path = "/ai/companions/$companionId/background",
+            fields = emptyMap(),
+            files = listOf(file)
+        )
+    }
+
+    fun listAiCompanionMessages(companionId: String): JSONArray {
         return request(
             method = "GET",
-            path = "/app/digital-human/messages?characterId=$characterId",
+            path = "/ai/companions/$companionId/messages",
             authorized = true
         ).getJSONArray("messages")
     }
 
-    fun listDigitalHumanMemories(characterId: String): JSONArray {
+    fun sendAiCompanionMessage(companionId: String, content: String): JSONObject {
+        return request(
+            method = "POST",
+            path = "/ai/companions/$companionId/messages",
+            authorized = true,
+            body = JSONObject().put("content", content)
+        )
+    }
+
+    fun listAiCompanionMemories(companionId: String): JSONArray {
         return request(
             method = "GET",
-            path = "/app/digital-human/memories?characterId=$characterId",
+            path = "/ai/companions/$companionId/memories",
             authorized = true
         ).getJSONArray("memories")
     }
 
-    fun digitalHumanMemorySettings(): JSONObject {
-        return request(
-            method = "GET",
-            path = "/app/digital-human/memory-settings",
-            authorized = true
-        )
-    }
-
-    fun setDigitalHumanMemoryEnabled(enabled: Boolean): JSONObject {
-        return request(
-            method = "PUT",
-            path = "/app/digital-human/memory-settings",
-            authorized = true,
-            body = JSONObject().put("enabled", enabled)
-        )
-    }
-
-    fun createDigitalHumanMemory(characterId: String, content: String, memoryType: String = "fact"): JSONObject {
+    fun createAiCompanionMemory(companionId: String, content: String): JSONObject {
         return request(
             method = "POST",
-            path = "/app/digital-human/memories",
+            path = "/ai/companions/$companionId/memories",
             authorized = true,
-            body = JSONObject()
-                .put("characterId", characterId)
-                .put("content", content)
-                .put("memoryType", memoryType)
-        ).getJSONObject("memory")
+            body = JSONObject().put("content", content)
+        )
     }
 
-    fun deleteDigitalHumanMemory(memoryId: String): JSONObject {
+    fun deleteAiCompanionMemory(companionId: String, memoryId: String): JSONObject {
         return request(
             method = "DELETE",
-            path = "/app/digital-human/memories/$memoryId",
+            path = "/ai/companions/$companionId/memories/$memoryId",
             authorized = true
         )
     }
 
-    fun deleteAllDigitalHumanMemories(characterId: String): JSONObject {
-        return request(
-            method = "DELETE",
-            path = "/app/digital-human/memories?characterId=$characterId",
-            authorized = true
+    fun listAiImageModels(): JSONArray {
+        val response = request(method = "GET", path = "/ai/image-models", authorized = true)
+        return response.optJSONArray("models")
+            ?: response.optJSONArray("imageModels")
+            ?: JSONArray()
+    }
+
+    fun createAiAvatarStudioImage(
+        companionId: String,
+        model: String,
+        prompt: String,
+        useCurrentAvatar: Boolean,
+        file: UploadPayload? = null
+    ): JSONObject {
+        require(model.isNotBlank()) { "ai_image_model_required" }
+        require(prompt.isNotBlank()) { "ai_avatar_prompt_required" }
+        return multipartRequest(
+            path = "/ai/companions/$companionId/avatar/studio",
+            fields = mapOf(
+                "model" to model,
+                "prompt" to prompt,
+                "useCurrentAvatar" to useCurrentAvatar.toString()
+            ),
+            files = listOfNotNull(file)
         )
     }
 
@@ -109,18 +174,25 @@ class AnyiApiClient(
         username: String,
         password: String,
         displayName: String,
+        gender: String,
+        avatar: UploadPayload,
         acceptedTerms: Boolean,
         acceptedPrivacy: Boolean
     ): JSONObject {
-        return request(
-            method = "POST",
+        val normalizedGender = normalizeUserGender(gender)
+        require(displayName.isNotBlank()) { "display_name_required" }
+        return multipartRequest(
             path = "/auth/register",
-            body = JSONObject()
-                .put("username", username)
-                .put("password", password)
-                .put("displayName", displayName)
-                .put("acceptedTerms", acceptedTerms)
-                .put("acceptedPrivacy", acceptedPrivacy)
+            fields = mapOf(
+                "username" to username,
+                "password" to password,
+                "displayName" to displayName,
+                "gender" to normalizedGender,
+                "acceptedTerms" to acceptedTerms.toString(),
+                "acceptedPrivacy" to acceptedPrivacy.toString()
+            ),
+            files = listOf(avatar),
+            authorized = false
         )
     }
 
@@ -134,7 +206,11 @@ class AnyiApiClient(
         )
     }
 
-    fun loginWithWechat(code: String, acceptedTerms: Boolean, acceptedPrivacy: Boolean): JSONObject {
+    fun loginWithWechat(
+        code: String,
+        acceptedTerms: Boolean,
+        acceptedPrivacy: Boolean
+    ): JSONObject {
         return request(
             method = "POST",
             path = "/auth/wechat",
@@ -149,46 +225,79 @@ class AnyiApiClient(
         return request(method = "GET", path = "/me", authorized = true)
     }
 
-    fun updateCurrentUser(displayName: String, avatarUrl: String?): JSONObject {
+    fun updateCurrentUser(displayName: String, avatarUrl: String?, gender: String? = null): JSONObject {
+        val body = JSONObject()
+            .put("displayName", displayName)
+            .put("avatarUrl", avatarUrl)
+        gender?.let { body.put("gender", normalizeUserGender(it)) }
         return request(
             method = "PATCH",
             path = "/me",
             authorized = true,
-            body = JSONObject()
-                .put("displayName", displayName)
-                .put("avatarUrl", avatarUrl)
+            body = body
         )
     }
 
-    fun deleteAccount(): JSONObject {
-        return request(method = "DELETE", path = "/me", authorized = true)
+    fun updateAiCompanionListBackground(backgroundUrl: String?): JSONObject {
+        return request(
+            method = "PATCH",
+            path = "/me/ai-companion-background",
+            authorized = true,
+            body = JSONObject().put("backgroundUrl", backgroundUrl)
+        )
+    }
+
+    fun uploadAiCompanionListBackground(file: UploadPayload): JSONObject {
+        return multipartRequest(
+            path = "/me/ai-companion-background",
+            fields = emptyMap(),
+            files = listOf(file)
+        )
     }
 
     fun listCommunityPosts(): JSONArray {
-        return request(method = "GET", path = "/community/posts", authorized = true).getJSONArray("posts")
+        return request(method = "GET", path = "/community/posts", authorized = true)
+            .getJSONArray("posts")
     }
 
-    fun createCommunityPost(content: String, imageUrls: List<String> = emptyList()): JSONObject {
+    fun createCommunityPost(
+        content: String,
+        imageUrls: List<String> = emptyList(),
+        idempotencyKey: String? = null
+    ): JSONObject {
         return request(
             method = "POST",
             path = "/community/posts",
             authorized = true,
             body = JSONObject()
                 .put("content", content)
-                .put("imageUrls", JSONArray(imageUrls))
+                .put("imageUrls", JSONArray(imageUrls)),
+            idempotencyKey = idempotencyKey
         )
     }
 
     fun deleteCommunityPost(postId: String): JSONObject {
-        return request(method = "DELETE", path = "/community/posts/$postId", authorized = true)
+        return request(
+            method = "DELETE",
+            path = "/community/posts/$postId",
+            authorized = true
+        )
     }
 
     fun likeCommunityPost(postId: String): JSONObject {
-        return request(method = "POST", path = "/community/posts/$postId/like", authorized = true)
+        return request(
+            method = "POST",
+            path = "/community/posts/$postId/like",
+            authorized = true
+        )
     }
 
     fun listCommunityPostComments(postId: String): JSONArray {
-        return request(method = "GET", path = "/community/posts/$postId/comments", authorized = true)
+        return request(
+            method = "GET",
+            path = "/community/posts/$postId/comments",
+            authorized = true
+        )
             .getJSONArray("comments")
     }
 
@@ -202,7 +311,11 @@ class AnyiApiClient(
     }
 
     fun deleteCommunityPostComment(postId: String, commentId: String): JSONObject {
-        return request(method = "DELETE", path = "/community/posts/$postId/comments/$commentId", authorized = true)
+        return request(
+            method = "DELETE",
+            path = "/community/posts/$postId/comments/$commentId",
+            authorized = true
+        )
     }
 
     fun reportCommunityContent(targetType: String, targetId: String, reason: String): JSONObject {
@@ -221,7 +334,14 @@ class AnyiApiClient(
         return request(method = "GET", path = "/community/volunteer", authorized = true)
     }
 
-    fun createCommunityVolunteer(title: String, body: String, contact: String, imageUrl: String? = null): JSONObject {
+    fun createCommunityVolunteer(
+        title: String,
+        body: String,
+        contact: String,
+        imageUrl: String? = null,
+        deadlineAt: String? = null,
+        volunteerCreateRequestId: String? = null
+    ): JSONObject {
         val requestBody = JSONObject()
             .put("title", title)
             .put("body", body)
@@ -229,15 +349,27 @@ class AnyiApiClient(
         if (!imageUrl.isNullOrBlank()) {
             requestBody.put("imageUrl", imageUrl)
         }
+        if (!deadlineAt.isNullOrBlank()) {
+            requestBody.put("deadlineAt", deadlineAt)
+        }
+        if (!volunteerCreateRequestId.isNullOrBlank()) {
+            requestBody.put("volunteerCreateRequestId", volunteerCreateRequestId)
+        }
         return request(
             method = "POST",
             path = "/community/volunteer",
             authorized = true,
-            body = requestBody
+            body = requestBody,
+            idempotencyKey = volunteerCreateRequestId
         ).getJSONObject("volunteer")
     }
 
-    fun applyForCommunityVolunteer(volunteerId: String, name: String, phone: String, note: String): JSONObject {
+    fun applyForCommunityVolunteer(
+        volunteerId: String,
+        name: String,
+        phone: String,
+        note: String
+    ): JSONObject {
         return request(
             method = "POST",
             path = "/community/volunteer/$volunteerId/applications",
@@ -266,6 +398,23 @@ class AnyiApiClient(
         ).getJSONObject("application")
     }
 
+    fun cancelCommunityVolunteerApplication(applicationId: String): JSONObject {
+        return request(
+            method = "DELETE",
+            path = "/community/volunteer/applications/$applicationId",
+            authorized = true
+        ).getJSONObject("application")
+    }
+
+    fun updateCommunityVolunteerStatus(volunteerId: String, status: String): JSONObject {
+        return request(
+            method = "PATCH",
+            path = "/community/volunteer/$volunteerId",
+            authorized = true,
+            body = JSONObject().put("status", status)
+        ).getJSONObject("volunteer")
+    }
+
     fun reportCrash(
         platform: String,
         appVersion: String,
@@ -291,7 +440,8 @@ class AnyiApiClient(
     }
 
     fun listMemorials(): JSONArray {
-        return request(method = "GET", path = "/memorials", authorized = true).getJSONArray("memorials")
+        return request(method = "GET", path = "/memorials", authorized = true)
+            .getJSONArray("memorials")
     }
 
     fun createMemorial(name: String, imageUrl: String?): JSONObject {
@@ -342,12 +492,34 @@ class AnyiApiClient(
         )
     }
 
-    fun uploadAsset(scope: String, fileName: String, mimeType: String, bytes: ByteArray): JSONObject {
+    fun uploadAsset(
+        scope: String,
+        fileName: String,
+        mimeType: String,
+        bytes: ByteArray,
+        idempotencyKey: String? = null,
+        uploadRequestId: String? = null
+    ): JSONObject {
+        val requestId = uploadRequestId ?: idempotencyKey
+        val fields = mutableMapOf("scope" to scope)
+        if (!uploadRequestId.isNullOrBlank()) {
+            fields["uploadRequestId"] = uploadRequestId
+        }
         return multipartRequest(
             path = "/assets",
-            fields = mapOf("scope" to scope),
-            files = listOf(UploadPayload(fileName, mimeType, bytes))
+            fields = fields,
+            files = listOf(UploadPayload(fileName, mimeType, bytes)),
+            idempotencyKey = requestId
         )
+    }
+
+    fun assetReviewStatus(assetId: String): JSONObject {
+        require(assetId.matches(Regex("[A-Za-z0-9-]{1,80}"))) { "invalid_asset_id" }
+        return request(
+            method = "GET",
+            path = "/asset-reviews/$assetId",
+            authorized = true
+        ).getJSONObject("review")
     }
 
     fun featureUnlocked(feature: String): Boolean {
@@ -366,11 +538,15 @@ class AnyiApiClient(
         method: String,
         path: String,
         authorized: Boolean = false,
-        body: JSONObject? = null
+        body: JSONObject? = null,
+        idempotencyKey: String? = null
     ): JSONObject {
-        return withApiFallback { currentBaseUrl ->
+        val execute: (String) -> JSONObject = { currentBaseUrl ->
             val connection = openConnection(currentBaseUrl, path, method, authorized)
             try {
+                if (!idempotencyKey.isNullOrBlank()) {
+                    connection.setRequestProperty("Idempotency-Key", idempotencyKey)
+                }
                 if (body != null) {
                     connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
                     connection.doOutput = true
@@ -383,9 +559,21 @@ class AnyiApiClient(
                 connection.disconnect()
             }
         }
+        // Only replay safe reads against another configured endpoint. A write may have
+        // reached the server before the connection failed, so replaying it can duplicate data.
+        return if (method.equals("GET", ignoreCase = true) || method.equals("HEAD", ignoreCase = true)) {
+            withApiFallback(execute)
+        } else {
+            execute(baseUrls.first())
+        }
     }
 
-    private fun openConnection(currentBaseUrl: String, path: String, method: String, authorized: Boolean): HttpURLConnection {
+    private fun openConnection(
+        currentBaseUrl: String,
+        path: String,
+        method: String,
+        authorized: Boolean
+    ): HttpURLConnection {
         val url = URL("${currentBaseUrl.trimEnd('/')}$path")
         if (!BuildConfig.DEBUG && url.protocol != "https") {
             throw IOException("cleartext_api_blocked")
@@ -408,38 +596,47 @@ class AnyiApiClient(
     private fun multipartRequest(
         path: String,
         fields: Map<String, String>,
-        files: List<UploadPayload>
+        files: List<UploadPayload>,
+        idempotencyKey: String? = null,
+        authorized: Boolean = true
     ): JSONObject {
-        return withApiFallback { currentBaseUrl ->
-            val boundary = "AnyiBoundary${UUID.randomUUID()}"
-            val connection = openConnection(currentBaseUrl, path, method = "POST", authorized = true)
-            try {
-                connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                connection.doOutput = true
-
-                DataOutputStream(connection.outputStream).use { stream ->
-                    fields.forEach { (name, value) ->
-                        stream.writeBytes("--$boundary\r\n")
-                        stream.writeBytes("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
-                        stream.writeBytes(value)
-                        stream.writeBytes("\r\n")
-                    }
-                    files.forEach { file ->
-                        stream.writeBytes("--$boundary\r\n")
-                        stream.writeBytes(
-                            "Content-Disposition: form-data; name=\"file\"; filename=\"${file.fileName}\"\r\n"
-                        )
-                        stream.writeBytes("Content-Type: ${file.mimeType}\r\n\r\n")
-                        stream.write(file.bytes)
-                        stream.writeBytes("\r\n")
-                    }
-                    stream.writeBytes("--$boundary--\r\n")
-                }
-
-                parseResponse(connection)
-            } finally {
-                connection.disconnect()
+        val currentBaseUrl = baseUrls.first()
+        val connection = openConnection(
+            currentBaseUrl,
+            path,
+            method = "POST",
+            authorized = authorized
+        )
+        return try {
+            if (!idempotencyKey.isNullOrBlank()) {
+                connection.setRequestProperty("Idempotency-Key", idempotencyKey)
             }
+            val boundary = "AnyiBoundary${UUID.randomUUID()}"
+            connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            connection.doOutput = true
+
+            DataOutputStream(connection.outputStream).use { stream ->
+                fields.forEach { (name, value) ->
+                    stream.writeBytes("--$boundary\r\n")
+                    stream.writeBytes("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
+                    stream.write(value.toByteArray(Charsets.UTF_8))
+                    stream.writeBytes("\r\n")
+                }
+                files.forEach { file ->
+                    stream.writeBytes("--$boundary\r\n")
+                    stream.writeBytes(
+                        "Content-Disposition: form-data; name=\"file\"; filename=\"${file.fileName}\"\r\n"
+                    )
+                    stream.writeBytes("Content-Type: ${file.mimeType}\r\n\r\n")
+                    stream.write(file.bytes)
+                    stream.writeBytes("\r\n")
+                }
+                stream.writeBytes("--$boundary--\r\n")
+            }
+
+            parseResponse(connection)
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -453,6 +650,9 @@ class AnyiApiClient(
             runCatching { JSONObject(text) }.getOrElse { JSONObject().put("error", text) }
         }
         if (status !in 200..299) {
+            if (status == 401) {
+                unauthorizedHandler?.invoke()
+            }
             throw AnyiApiException(status, json.optString("error", "request_failed"), json)
         }
         return json
@@ -480,8 +680,8 @@ class AnyiApiClient(
 
     private fun readTimeoutFor(path: String, method: String): Int {
         return when {
-            path == "/assets" || path.endsWith("/acceptance") -> 120_000
-            path == "/app/digital-human/chat" -> 60_000
+            path == "/assets" || path.endsWith("/assets") || path.endsWith("/acceptance") -> 120_000
+            path.endsWith("/messages") || path.endsWith("/avatar/studio") -> 120_000
             else -> 30_000
         }
     }
@@ -500,6 +700,14 @@ class AnyiApiClient(
             .distinct()
             .filter { BuildConfig.DEBUG || it.startsWith("https://") }
         return secureCandidates.ifEmpty { listOf(primary.trim().trimEnd('/')) }
+    }
+}
+
+private fun normalizeUserGender(value: String): String {
+    return when (value.trim()) {
+        "男" -> "男"
+        "女" -> "女"
+        else -> throw IllegalArgumentException("user_gender_invalid")
     }
 }
 

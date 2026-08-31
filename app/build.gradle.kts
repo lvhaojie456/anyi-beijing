@@ -40,8 +40,8 @@ android {
         applicationId = "com.anyi.memorial"
         minSdk = 24
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.0.7-test"
+        versionCode = 19
+        versionName = "1.0.17"
         buildConfigField("String", "API_BASE_URL", buildConfigString(apiBaseUrl))
         buildConfigField("String", "API_BASE_URLS", buildConfigString(apiBaseUrls))
         buildConfigField("String", "WECHAT_APP_ID", buildConfigString(wechatAppId))
@@ -86,9 +86,11 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.wechat.sdk.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
 }
