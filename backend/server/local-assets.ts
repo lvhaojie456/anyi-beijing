@@ -1,6 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import path from "node:path";
+
 import sharp from "sharp";
 
 type AssetMetadata = {
@@ -19,11 +28,34 @@ export class LocalAssetBucket {
     mkdirSync(this.root, { recursive: true });
   }
 
-  async put(key: string, value: ArrayBuffer | Uint8Array | Buffer, options?: AssetMetadata) {
+  async put(
+    key: string,
+    value: ArrayBuffer | Uint8Array | Buffer,
+    options?: AssetMetadata
+  ) {
     const filePath = this.resolveKey(key);
     mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, Buffer.from(value instanceof ArrayBuffer ? new Uint8Array(value) : value));
-    writeFileSync(`${filePath}.meta.json`, JSON.stringify(options || {}, null, 2));
+    const input = Buffer.from(value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+    const contentType = options?.httpMetadata?.contentType?.toLowerCase() || "";
+    const output = contentType.startsWith("image/")
+      ? await sanitizeImage(input, contentType)
+      : input;
+    const temporarySuffix = `${randomUUID()}.tmp`;
+    const temporaryFilePath = `${filePath}.${temporarySuffix}`;
+    const metadataPath = `${filePath}.meta.json`;
+    const temporaryMetadataPath = `${metadataPath}.${temporarySuffix}`;
+    try {
+      // Publish the data file last. Readers only consider an asset present once
+      // that path exists, so a process interruption cannot expose a partial
+      // upload or a file without its metadata.
+      writeFileSync(temporaryFilePath, output);
+      writeFileSync(temporaryMetadataPath, JSON.stringify(options || {}, null, 2));
+      renameSync(temporaryMetadataPath, metadataPath);
+      renameSync(temporaryFilePath, filePath);
+    } finally {
+      rmSync(temporaryFilePath, { force: true });
+      rmSync(temporaryMetadataPath, { force: true });
+    }
   }
 
   async get(key: string, options?: { maxDimension?: number; format?: "webp" }) {
@@ -113,5 +145,23 @@ export class LocalAssetBucket {
       throw new Error("asset_key_outside_root");
     }
     return filePath;
+  }
+}
+
+async function sanitizeImage(input: Buffer, contentType: string) {
+  const image = sharp(input, {
+    failOn: "error",
+    limitInputPixels: 40_000_000,
+    sequentialRead: true
+  }).rotate();
+  switch (contentType) {
+    case "image/jpeg":
+      return image.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+    case "image/png":
+      return image.png({ compressionLevel: 9 }).toBuffer();
+    case "image/webp":
+      return image.webp({ quality: 88, effort: 4 }).toBuffer();
+    default:
+      throw new Error("unsupported_image_asset_type");
   }
 }

@@ -17,6 +17,8 @@
 ```bash
 sudo mkdir -p /opt/anyiapp2
 sudo chown -R ubuntu:ubuntu /opt/anyiapp2
+sudo install -d -o ubuntu -g ubuntu -m 700 /var/lib/anyi-memorial-api
+sudo install -d -o ubuntu -g ubuntu -m 700 /var/lib/anyi-memorial-api/uploads
 ```
 
 把本地 `D:\Desktop\anyiapp2` 上传到服务器 `/opt/anyiapp2`。
@@ -49,9 +51,11 @@ sudo systemctl enable --now mysql
 
 ```bash
 cd /opt/anyiapp2/backend
-npm install
+npm ci
 npm run server:build
 ```
+
+`.nvmrc` 固定生产 Node 版本（当前为 20.19.0）；部署机应使用同一主版本和 npm 10.8.2，避免原生依赖漂移。`npm ci` 会严格按 `package-lock.json` 安装，不要在生产机运行 `npm install` 修改锁文件。
 
 ## 3. 配置环境变量
 
@@ -76,8 +80,14 @@ ANYI_MYSQL_MIGRATIONS_DIR=/opt/anyiapp2/backend/migrations-mysql
 ANYI_DATA_DIR=/var/lib/anyi-memorial-api
 PUBLIC_ASSET_BASE_URL=https://api.anyibj.cn
 ALLOWED_ORIGINS=https://api.anyibj.cn
+APEXIN_BASE_URL=https://api.apexin.ai/v1
+APEXIN_API_KEY=replace-with-apexin-api-key
+AI_MODEL=gpt-5.5
+AI_MEMORY_MODEL=gpt-5.5
 PAYMENT_ENABLED=false
 ```
+
+`APEXIN_API_KEY` 只能保存在服务器 `.env`，不得写入 Android、Git、日志或接口响应。聊天与头像生成会直接调用 Apexin；未配置密钥时相关接口返回 `503 ai_provider_not_configured`。systemd 单元不会覆盖 `.env` 中的 Apexin 配置。
 
 生成随机 `AUTH_SECRET`：
 
@@ -108,6 +118,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now anyi-memorial-api
 sudo systemctl status anyi-memorial-api --no-pager
 ```
+
+服务单元启用 `TRUST_PROXY=true`，因此 Nginx 配置必须同时使用仓库中的版本，由 Nginx 覆盖客户端传入的 IP 头。更新代码时同步复制 systemd/Nginx 示例并执行 `daemon-reload`、`nginx -t` 和 reload，不能只重启 Node。
 
 查看日志：
 
@@ -171,3 +183,22 @@ sudo systemctl start anyi-mysql-backup.service
 ```
 
 备份目录默认是 `/home/ubuntu/anyi-db-backups`，保留 14 天。建议再把备份同步到腾讯云 COS 或另一台服务器。
+
+### 恢复演练
+
+先恢复到隔离数据库，不要直接导入生产库：
+
+```bash
+sudo systemctl stop anyi-memorial-api
+mysql -e 'CREATE DATABASE IF NOT EXISTS anyi_memorial_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+gunzip -c /home/ubuntu/anyi-db-backups/anyi-mysql-anyi_memorial-YYYYMMDD-HHMMSS.sql.gz \
+  | mysql anyi_memorial_restore
+sudo mkdir -p /var/lib/anyi-memorial-api-restore
+sudo tar -xzf /home/ubuntu/anyi-db-backups/anyi-uploads-YYYYMMDD-HHMMSS.tar.gz \
+  -C /var/lib/anyi-memorial-api-restore
+mysql -D anyi_memorial_restore -e 'SELECT COUNT(*) AS users FROM users'
+sudo systemctl start anyi-memorial-api
+curl http://127.0.0.1:8787/health
+```
+
+确认数据库行数、`/health` 和 uploads 文件可读后，再按变更窗口制定生产切换方案。备份文件应在本机之外再保留一份。

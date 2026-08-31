@@ -1,16 +1,39 @@
 [Unit]
 Description=Anyi Memorial API
-After=network.target
+Wants=network-online.target
+After=network-online.target mysql.service
 
 [Service]
 Type=simple
 User=ubuntu
+Group=ubuntu
 WorkingDirectory=/opt/anyiapp2/backend
 EnvironmentFile=/opt/anyiapp2/backend/.env
 Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production
+Environment=TRUST_PROXY=true
 ExecStart=/usr/bin/node /opt/anyiapp2/backend/dist-node/server/server.js
 Restart=always
 RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+
+# Keep the deployed code and host system read-only. The API only needs to
+# write the persistent database and uploads directory.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/anyi-memorial-api
+
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

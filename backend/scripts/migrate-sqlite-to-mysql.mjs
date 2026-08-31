@@ -1,6 +1,7 @@
 import "dotenv/config";
 import Database from "better-sqlite3";
 import mysql from "mysql2/promise";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +10,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(__dirname, "..");
 
 const importPlan = [
-  table("users", ["id", "username", "password_hash", "display_name", "role", "avatar_url", "created_at", "deleted_at", "wechat_openid", "wechat_unionid", "wechat_nickname"], ["id"]),
+  table("users", ["id", "username", "password_hash", "display_name", "gender", "role", "avatar_url", "ai_companion_list_background_url", "created_at", "deleted_at", "wechat_openid", "wechat_unionid", "wechat_nickname"], ["id"], {
+    defaults: { gender: null, ai_companion_list_background_url: null }
+  }),
   table("talisman_products", ["id", "name", "description", "price_cents", "image_url", "active", "created_at"], ["id"]),
   table("memorials", ["id", "owner_id", "name", "image_url", "flower_until_json", "candle_until", "candle_until_json", "fruit_offerings_json", "incense_until", "created_at", "updated_at"], ["id"], {
     defaults: { flower_until_json: "[]", candle_until: 0, candle_until_json: "[]", fruit_offerings_json: "[]", incense_until: 0 }
@@ -19,15 +22,14 @@ const importPlan = [
   }),
   table("order_messages", ["id", "order_id", "sender_id", "sender_role", "content", "created_at"], ["id"]),
   table("talisman_orders", ["id", "user_id", "product_id", "amount_cents", "status", "created_at", "updated_at"], ["id"]),
-  table("assets", ["id", "owner_id", "asset_key", "url", "mime_type", "size_bytes", "created_at"], ["id"], { aliases: { asset_key: ["asset_key", "r2_key"] } }),
+  table("assets", ["id", "owner_id", "asset_key", "url", "mime_type", "size_bytes", "client_request_id", "created_at"], ["id"], {
+    aliases: { asset_key: ["asset_key", "r2_key"] },
+    defaults: { client_request_id: null }
+  }),
   table("payment_events", ["id", "order_type", "order_id", "provider", "provider_trade_no", "amount_cents", "status", "raw_json", "created_at"], ["id"]),
-  table("ai_profiles", ["user_id", "gender", "relation", "avatar_url", "smile_avatar_url", "avatar_motion_json", "paid_unlocked", "photo_count", "voice_count", "moment_count", "generated", "updated_at"], ["user_id"], {
-    defaults: { smile_avatar_url: null, avatar_motion_json: "{}" }
-  }),
-  table("ai_companions", ["id", "user_id", "display_name", "gender", "relation", "avatar_url", "smile_avatar_url", "avatar_motion_json", "paid_unlocked", "photo_count", "voice_count", "moment_count", "generated", "avatar_style_json", "kernel_json", "is_default", "created_at", "updated_at"], ["id"], {
-    defaults: { smile_avatar_url: null, avatar_motion_json: "{}", avatar_style_json: "{}", kernel_json: "{}" }
-  }),
-  table("ai_chat_messages", ["id", "user_id", "companion_id", "sender", "content", "created_at"], ["id"], { defaults: { companion_id: null } }),
+  // The rebuilt AI companion starts from an intentional clean slate. Do not
+  // re-import legacy profiles, companions, messages, or memories after the
+  // reset migration has cleared the target AI tables.
   table("feature_unlocks", ["user_id", "feature", "created_at"], ["user_id", "feature"]),
   table("account_deletion_requests", ["id", "username", "contact", "reason", "status", "created_at", "updated_at"], ["id"], { defaults: { status: "pending" } }),
   table("rate_limits", ["bucket_key", "route_key", "window_start", "count", "updated_at"], ["bucket_key", "route_key", "window_start"]),
@@ -44,7 +46,9 @@ const importPlan = [
   table("crash_reports", ["id", "user_id", "platform", "app_version", "device_model", "os_version", "error_type", "message", "stack_trace", "created_at"], ["id"]),
   table("community_posts", ["id", "user_id", "content", "image_urls", "created_at", "updated_at"], ["id"], { defaults: { image_urls: "[]" } }),
   table("community_post_likes", ["post_id", "user_id", "created_at"], ["post_id", "user_id"]),
-  table("community_volunteer_posts", ["id", "admin_id", "title", "body", "contact", "image_url", "created_at"], ["id"], { defaults: { image_url: null } }),
+  table("community_volunteer_posts", ["id", "admin_id", "title", "body", "contact", "image_url", "status", "deadline_at", "client_request_id", "created_at"], ["id"], {
+    defaults: { image_url: null, status: "open", deadline_at: null, client_request_id: null }
+  }),
   table("community_volunteer_applications", ["id", "volunteer_post_id", "volunteer_title", "user_id", "name", "phone", "note", "status", "reviewer_id", "reviewed_at", "created_at", "updated_at"], ["id"], {
     defaults: { status: "pending", reviewer_id: null, reviewed_at: null }
   }),
@@ -254,35 +258,188 @@ async function applyMySqlMigrations(pool, dir) {
     throw new Error(`MySQL migrations directory not found: ${dir}`);
   }
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS _node_migrations (
-      name VARCHAR(191) NOT NULL,
-      applied_at VARCHAR(32) NOT NULL,
-      PRIMARY KEY (name)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  `);
-
   const files = readdirSync(dir)
-    .filter((file) => file.endsWith(".sql"))
+    .filter((file) => /^[0-9][A-Za-z0-9._-]*\.sql$/.test(file))
     .sort();
 
-  for (const file of files) {
-    const [rows] = await pool.execute("SELECT name FROM _node_migrations WHERE name = ?", [file]);
-    if (rows.length > 0) continue;
-
-    const sql = readFileSync(path.join(dir, file), "utf8");
-    for (const statement of splitSqlStatements(sql)) {
-      await pool.query(statement);
+  const connection = await pool.getConnection();
+  const [databaseRows] = await connection.query("SELECT DATABASE() AS name");
+  const databaseName = String(databaseRows[0]?.name || "default");
+  const lockName = `anyi-migrations:${createHash("sha256").update(databaseName).digest("hex").slice(0, 48)}`;
+  try {
+    const timeout = Number(process.env.MYSQL_MIGRATION_LOCK_TIMEOUT_SECONDS || "60");
+    if (!Number.isInteger(timeout) || timeout < 0) {
+      throw new Error("MYSQL_MIGRATION_LOCK_TIMEOUT_SECONDS must be a non-negative integer");
     }
-    await pool.execute("INSERT INTO _node_migrations (name, applied_at) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = name", [file, new Date().toISOString()]);
+    const [lockRows] = await connection.query("SELECT GET_LOCK(?, ?) AS acquired", [lockName, timeout]);
+    if (Number(lockRows[0]?.acquired || 0) !== 1) {
+      throw new Error(`Timed out waiting for MySQL migration lock ${lockName}`);
+    }
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS _node_migrations (
+        name VARCHAR(191) NOT NULL,
+        applied_at VARCHAR(32) NOT NULL,
+        checksum CHAR(64) NULL,
+        PRIMARY KEY (name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+    const [columns] = await connection.query(
+      `SELECT COLUMN_NAME AS name
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '_node_migrations'`
+    );
+    if (!columns.some((column) => column.name === "checksum")) {
+      await connection.query("ALTER TABLE _node_migrations ADD COLUMN checksum CHAR(64) NULL");
+    }
+
+    for (const file of files) {
+      const sql = readFileSync(path.join(dir, file), "utf8");
+      const checksum = createHash("sha256").update(sql).digest("hex");
+      const [rows] = await connection.execute("SELECT name, checksum FROM _node_migrations WHERE name = ?", [file]);
+      const applied = rows[0];
+      if (applied) {
+        if (applied.checksum && applied.checksum !== checksum) {
+          throw new Error(`Migration ${file} has changed since it was applied`);
+        }
+        if (!applied.checksum) {
+          await connection.execute("UPDATE _node_migrations SET checksum = ? WHERE name = ?", [checksum, file]);
+        }
+        continue;
+      }
+
+      await connection.beginTransaction();
+      try {
+        for (const statement of splitSqlStatements(sql)) {
+          await executeMigrationStatement(connection, statement);
+        }
+        await connection.execute(
+          "INSERT INTO _node_migrations (name, applied_at, checksum) VALUES (?, ?, ?)",
+          [file, new Date().toISOString(), checksum]
+        );
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw new Error(`Migration ${file} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
+    }
+  } finally {
+    try {
+      await connection.query("SELECT RELEASE_LOCK(?)", [lockName]);
+    } finally {
+      connection.release();
+    }
   }
 }
 
+async function executeMigrationStatement(connection, statement) {
+  try {
+    await connection.query(statement);
+  } catch (error) {
+    if (await isCompatibleAlterAlreadyApplied(connection, statement, error)) return;
+    throw error;
+  }
+}
+
+async function isCompatibleAlterAlreadyApplied(connection, statement, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/duplicate (?:column|key|index)|already exists/i.test(message)) return false;
+  const tableMatch = /^\s*ALTER\s+TABLE\s+`?([A-Za-z0-9_]+)`?/i.exec(statement);
+  if (!tableMatch) return false;
+  const columns = [...statement.matchAll(
+    /\bADD\s+(?:COLUMN\s+)?(?!KEY\b|INDEX\b|UNIQUE\b|PRIMARY\b|CONSTRAINT\b)`?([A-Za-z0-9_]+)`?/gi
+  )].map((match) => match[1]);
+  const indexes = [...statement.matchAll(
+    /\bADD\s+(?:UNIQUE\s+)?(?:KEY|INDEX)\s+`?([A-Za-z0-9_]+)`?/gi
+  )].map((match) => match[1]);
+  if (columns.length === 0 && indexes.length === 0) return false;
+  const [columnRows] = await connection.execute(
+    `SELECT COLUMN_NAME AS name FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [tableMatch[1]]
+  );
+  const [indexRows] = await connection.execute(
+    `SELECT DISTINCT INDEX_NAME AS name FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [tableMatch[1]]
+  );
+  const existingColumns = new Set(columnRows.map((row) => String(row.name)));
+  const existingIndexes = new Set(indexRows.map((row) => String(row.name)));
+  return columns.every((name) => existingColumns.has(name)) &&
+    indexes.every((name) => existingIndexes.has(name));
+}
+
 function splitSqlStatements(sql) {
-  return sql
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
+  const statements = [];
+  let statement = "";
+  let quote = null;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < sql.length; index += 1) {
+    const character = sql[index];
+    const next = sql[index + 1];
+    if (lineComment) {
+      statement += character;
+      if (character === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      statement += character;
+      if (character === "*" && next === "/") {
+        statement += next;
+        index += 1;
+        blockComment = false;
+      }
+      continue;
+    }
+    if (quote) {
+      statement += character;
+      if (character === "\\" && next) {
+        statement += next;
+        index += 1;
+        continue;
+      }
+      if (character === quote) {
+        if (sql[index + 1] === quote) {
+          statement += sql[index + 1];
+          index += 1;
+        } else {
+          quote = null;
+        }
+      }
+      continue;
+    }
+    if (character === "-" && next === "-") {
+      statement += character + next;
+      index += 1;
+      lineComment = true;
+      continue;
+    }
+    if (character === "#") {
+      statement += character;
+      lineComment = true;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      statement += character + next;
+      index += 1;
+      blockComment = true;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      statement += character;
+      continue;
+    }
+    if (character === ";") {
+      if (statement.trim()) statements.push(statement.trim());
+      statement = "";
+      continue;
+    }
+    statement += character;
+  }
+  if (statement.trim()) statements.push(statement.trim());
+  return statements;
 }
 
 async function resetTargetTables(pool, plan) {

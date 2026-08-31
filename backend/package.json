@@ -2,22 +2,29 @@
   "name": "anyi-memorial-api",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0",
+    "npm": ">=10.8.2"
+  },
+  "packageManager": "npm@10.8.2",
   "scripts": {
-    "server:build": "tsc -p tsconfig.node.json",
-    "server:start": "node dist-node/server/server.js",
     "admin:promote": "node scripts/set-admin-role.mjs",
-    "server:restart": "npm run server:build && npm run server:start",
     "asset:delete:process": "powershell -ExecutionPolicy Bypass -File scripts/process-asset-delete-queue.ps1",
+    "check": "tsc --noEmit",
     "db:migrate:mysql": "node scripts/migrate-sqlite-to-mysql.mjs",
     "db:migrate:mysql:dry-run": "node scripts/migrate-sqlite-to-mysql.mjs --dry-run",
-    "digital-human:smoke": "node scripts/digital-human-smoke.mjs",
-    "check": "tsc --noEmit"
+    "server:build": "tsc -p tsconfig.node.json",
+    "server:restart": "npm run server:build && npm run server:start",
+    "server:start": "node dist-node/server/server.js",
+    "test:migrations": "npm run server:build && node --test tests/migrations.test.mjs",
+    "test:security": "npm run server:build && node --test tests/security.test.mjs",
+    "test": "npm run check && npm run server:build && node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "@hono/node-server": "^2.0.2",
+    "@hono/node-server": "2.1.1",
     "better-sqlite3": "^12.10.0",
     "dotenv": "^17.4.2",
-    "hono": "^4.7.11",
+    "hono": "4.13.5",
     "mysql2": "^3.22.5",
     "sharp": "^0.35.4"
   },
