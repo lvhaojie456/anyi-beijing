@@ -130,12 +130,16 @@ sudo mysql -N anyi_memorial -e \
   'SELECT name, applied_at FROM _node_migrations ORDER BY name;'
 ```
 
-AI 长期记忆使用以下表：
+新版 AI 陪伴使用以下表：
 
 ```text
+ai_companions
+ai_chat_messages
 ai_memory_items
 ai_memory_settings
 ```
+
+首次部署新版时，MySQL 迁移 `0007_ai_companion_reset.sql` 会一次性清空旧 AI profile、人物、聊天和记忆。部署前必须确认无需保留，或先做独立备份。
 
 备份服务：
 
@@ -369,7 +373,8 @@ sudo journalctl -u anyi-memorial-api -n 80 --no-pager
 - Nginx HTTPS 正常。
 - MySQL 迁移记录已更新。
 - 上传目录和 `.env` 没有被覆盖。
-- AI 长期记忆默认关闭，账号和角色隔离正常。
+- 人物、聊天和手动记忆账号隔离正常；自动整理新记忆默认关闭。
+- `APEXIN_API_KEY` 仅存在服务器 `.env`，聊天使用 `gpt-5.5`，GPT/Gemini 图片模型分别走各自接口。
 - 数据库和 uploads 备份任务成功。
 - Android 下载地址返回预期 APK，而不是临时 unsigned 构建产物。
 
@@ -379,4 +384,4 @@ GitHub 仓库：
 https://github.com/lvhaojie456/anyi-beijing.git
 ```
 
-当前已推送的 AI 记忆实现提交：`0e978cd`。工作区可能仍有未提交的图片缓存和 `sharp` 缩略图改动，交接或发布前必须先审查 `git status`，不要把个人文件和敏感文件上传到服务器。
+交接或发布前必须先审查 `git status` 和待部署 commit，确认破坏性 AI 重置迁移已被明确接受；不要把个人文件、`.env`、密钥或测试账号上传到服务器。

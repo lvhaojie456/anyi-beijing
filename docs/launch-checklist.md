@@ -6,6 +6,7 @@
 - Android 联网权限：已加入 `INTERNET`
 - Android 后端地址：通过 `-PANYI_API_BASE_URL=...` 注入 `BuildConfig.API_BASE_URL`
 - 默认 API 地址：`https://api.anyibj.cn`
+- 首次启动隐私同意：同意前不连接云端、不初始化微信登录、不启用崩溃上报
 - Release 签名入口：通过 `ANYI_RELEASE_*` 环境变量配置，不提交 keystore
 - 后端骨架：账号、管理员、纪念馆、订单、聊天、验收图片、护符商城、文件上传；支付接口默认关闭
 - 数据库迁移：SQLite 使用 `backend/migrations/*.sql`，MySQL 使用 `backend/migrations-mysql/*.sql`
@@ -71,14 +72,15 @@ pending_payment -> pending_order -> accepted -> in_progress -> pending_acceptanc
 - 接入真实支付后的重复支付、回调延迟、金额不一致
 - 深色模式、不同屏幕尺寸、首次安装和升级安装
 - Release AAB 安装、崩溃日志、隐私弹窗、测试账号
-- 开启长期记忆后验证跨次启动恢复；验证查看、单条删除、清空全部、明确“忘记”和敏感信息过滤
+- 验证人物记忆跨次启动恢复、手动新增/查看/单条删除和敏感信息过滤；如开启自动整理，再单独验证开关与“忘记”指令
+- 验证 `gpt-image-2` 走 Image API，六个 Gemini 图片模型走 `generateContent`，并确认客户端拿不到 Apexin 密钥
 
 ## 上线前不可省略
 
 - 后端必须开启 HTTPS 和自有域名。
 - 支付签名校验必须接真实微信支付或支付宝官方流程。
 - 隐私政策必须覆盖头像、纪念照片、语音、聊天、订单、支付信息。
-- AI 陪伴如果未接真实 AI，商店描述必须明确“演示功能”或“暂未接入真实 AI”。
+- 隐私政策和商店隐私清单必须明确 Apexin 处理的人物设定、相关记忆、对话和头像提示词。
 - MySQL 数据库和上传目录必须配置定时备份。
-- AI 长期记忆必须支持用户查看、单条删除、清空全部，并在账号注销时一并删除。
+- AI 人物记忆必须支持用户查看和单条删除，并在删除人物或注销账号时一并删除。
 - 管理后台建议独立成后台域名，App 内仅保留入口。
