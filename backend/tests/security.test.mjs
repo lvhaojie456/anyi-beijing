@@ -518,7 +518,7 @@ test("AI backgrounds reject assets owned by another user or non-images", async (
   }
 });
 
-test("application config does not expose retired AI compatibility fields", async () => {
+test("application config only exposes the supported AI voice capability", async () => {
   const response = await app.fetch(new Request("http://127.0.0.1/app/config", {
     headers: {
       Host: "api.anyibj.cn",
@@ -528,7 +528,7 @@ test("application config does not expose retired AI compatibility fields", async
   }), testEnv({ TRUST_PROXY: "true" }));
   assert.equal(response.status, 200);
   const payload = await response.json();
-  assert.equal("ai" in payload, false);
+  assert.deepEqual(payload.ai, { voice: { enabled: false, asrConfigured: false } });
   assert.equal("digitalHuman" in payload, false);
 });
 
@@ -726,7 +726,7 @@ test("AI provider calls fail clearly when the server key is missing", async () =
 
   const config = await app.fetch(new Request("https://api.anyibj.cn/app/config"), testEnv());
   const payload = await config.json();
-  assert.equal("ai" in payload, false);
+  assert.deepEqual(payload.ai, { voice: { enabled: false, asrConfigured: false } });
   assert.equal("digitalHuman" in payload, false);
 });
 
@@ -996,7 +996,7 @@ test("avatar studio sends uploaded image as Gemini inlineData", async () => {
   }
 });
 
-test("companion chat defaults to gpt-5.5 through the shared Apexin secret", async () => {
+test("companion chat defaults to gpt-5.6-luna through the shared Apexin secret", async () => {
   const db = aiCompanionDatabase();
   const previousFetch = globalThis.fetch;
   let upstreamUrl = "";
@@ -1027,9 +1027,72 @@ test("companion chat defaults to gpt-5.5 through the shared Apexin secret", asyn
     }));
     assert.equal(response.status, 201);
     assert.equal(upstreamUrl, "https://api.apexin.test/v1/chat/completions");
-    assert.equal(upstreamBody.model, "gpt-5.5");
+    assert.equal(upstreamBody.model, "gpt-5.6-luna");
     assert.equal((await response.json()).messages[1].content, "我在这里。");
   } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("same companion chat requests are processed one at a time", async () => {
+  const previousFetch = globalThis.fetch;
+  const releases = [];
+  let upstreamCalls = 0;
+  let activeCalls = 0;
+  let maxActiveCalls = 0;
+  globalThis.fetch = async () => {
+    upstreamCalls += 1;
+    activeCalls += 1;
+    maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+    await new Promise((resolve) => releases.push(resolve));
+    activeCalls -= 1;
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: `回复${upstreamCalls}` } }] }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  };
+
+  const request = (content) => app.fetch(new Request(
+    "https://api.anyibj.cn/ai/companions/companion-1/messages",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${userToken()}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ content })
+    }
+  ), testEnv({
+    DB: aiCompanionDatabase(),
+    APEXIN_BASE_URL: "https://api.apexin.test/v1",
+    APEXIN_API_KEY: "test-secret"
+  }));
+
+  try {
+    const first = request("第一条");
+    for (let attempt = 0; attempt < 100 && upstreamCalls < 1; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    assert.equal(upstreamCalls, 1);
+
+    const second = request("第二条");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(upstreamCalls, 1);
+    releases.shift()();
+
+    const firstResponse = await first;
+    assert.equal(firstResponse.status, 201);
+    for (let attempt = 0; attempt < 100 && upstreamCalls < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    assert.equal(upstreamCalls, 2);
+    releases.shift()();
+
+    const secondResponse = await second;
+    assert.equal(secondResponse.status, 201);
+    assert.equal(maxActiveCalls, 1);
+  } finally {
+    releases.splice(0).forEach((release) => release());
     globalThis.fetch = previousFetch;
   }
 });
@@ -1123,6 +1186,102 @@ test("chat sends directional relation, user gender, reciprocal role, and all man
     for (const memory of manualMemories) {
       assert.ok(prompt.includes(Buffer.from(memory.content).toString("base64")));
     }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("manual companion facts override a conflicting assistant history", async () => {
+  const manualMemories = [{
+    id: "memory-fruit",
+    user_id: "user-1",
+    companion_key: "companion-1",
+    memory_type: "fact",
+    memory_key: "fact:fruit_preferences",
+    content: "我喜欢吃苹果，儿子喜欢吃梨",
+    source_message_id: null,
+    confidence: 1,
+    importance: 100,
+    last_used_at: null,
+    created_at: "2026-08-30T00:00:00.000Z",
+    updated_at: "2026-08-30T00:00:00.000Z",
+    expires_at: null
+  }];
+  const history = [{
+    id: "assistant-old",
+    companion_id: "companion-1",
+    sender: "ai",
+    content: "我喜欢吃桃",
+    created_at: "2026-08-30T00:01:00.000Z",
+    message_type: "text",
+    duration_ms: null,
+    audio_mime_type: null,
+    audio_url: null,
+    audio_asset_id: null
+  }];
+  const baseDb = aiCompanionDatabase({ companionOverrides: { relation: "儿子", gender: "男" } });
+  const db = {
+    ...baseDb,
+    prepare(query) {
+      if (query.includes("FROM ai_chat_messages") && query.includes("LIMIT 20")) {
+        return {
+          bind() { return this; },
+          async first() { return null; },
+          async all() { return { results: history, success: true, meta: {} }; },
+          async run() { return { success: true, meta: { changes: 1 } }; }
+        };
+      }
+      if (query.includes("FROM ai_memory_items") && query.includes("companion_key = ?")) {
+        return {
+          bind() { return this; },
+          async first() { return null; },
+          async all() { return { results: manualMemories, success: true, meta: {} }; },
+          async run() { return { success: true, meta: { changes: 1 } }; }
+        };
+      }
+      return baseDb.prepare(query);
+    }
+  };
+  const previousFetch = globalThis.fetch;
+  let upstreamBody = null;
+  globalThis.fetch = async (_input, init) => {
+    upstreamBody = JSON.parse(String(init.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: "应该是梨。" } }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+  try {
+    const response = await app.fetch(new Request(
+      "https://api.anyibj.cn/ai/companions/companion-1/messages",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken()}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ content: "你喜欢吃什么水果" })
+      }
+    ), testEnv({
+      DB: db,
+      APEXIN_BASE_URL: "https://api.apexin.test/v1",
+      APEXIN_API_KEY: "test-secret"
+    }));
+    assert.equal(response.status, 201);
+    const systemPrompt = upstreamBody.messages[0].content;
+    const prompt = upstreamBody.messages[1].content;
+    assert.equal(upstreamBody.temperature, 0.28);
+    assert.match(systemPrompt, /Memory grounding has the highest priority/);
+    assert.match(systemPrompt, /MUST NOT override a manual fact/);
+    assert.match(systemPrompt, /我\/我的 normally refers to the user/);
+    assert.match(systemPrompt, /儿子.*COMPANION likes 梨/);
+    assert.ok(prompt.indexOf("conversation_history_base64_lines:") < prompt.indexOf("all_manual_memory_base64_lines:"));
+    assert.ok(prompt.includes(Buffer.from("我喜欢吃桃").toString("base64")));
+    assert.ok(prompt.includes(Buffer.from("我喜欢吃苹果，儿子喜欢吃梨").toString("base64")));
+    assert.match(prompt, /source=user_curated; priority=authoritative/);
+    assert.match(prompt, /resolved_manual_memory_subject_base64_lines:/);
+    assert.ok(prompt.includes(`subject=USER; fact_base64=${Buffer.from("我喜欢吃苹果").toString("base64")}`));
+    assert.ok(prompt.includes(`subject=COMPANION; fact_base64=${Buffer.from("儿子喜欢吃梨").toString("base64")}`));
   } finally {
     globalThis.fetch = previousFetch;
   }

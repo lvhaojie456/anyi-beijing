@@ -6721,7 +6721,7 @@ private fun clearSession(context: Context) {
     SessionTokenVault.clear(context)
 }
 
-private fun Context.persistReadPermission(uri: Uri) {
+internal fun Context.persistReadPermission(uri: Uri) {
     runCatching {
         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
@@ -7004,15 +7004,18 @@ private fun Throwable.isAuthExpired(): Boolean {
 }
 
 internal fun Context.readUploadPayload(uri: Uri): UploadPayload {
-    val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
-    val maxBytes = if (mimeType.startsWith("audio/")) 50L * 1024L * 1024L else 20L * 1024L * 1024L
+    val declaredMimeType = contentResolver.getType(uri)
+    val rawName = queryDisplayName(uri)
+        ?: uri.lastPathSegment?.substringAfterLast('/')
+        ?: "upload-${System.currentTimeMillis()}"
+    // A few document providers omit ContentResolver.getType(). Use the file
+    // name as a first-pass limit, then refine it from the actual bytes below.
+    val preliminaryMimeType = inferUploadMimeType(declaredMimeType, rawName, byteArrayOf())
+    val maxBytes = if (preliminaryMimeType.startsWith("audio/")) 50L * 1024L * 1024L else 20L * 1024L * 1024L
     val declaredSize = queryFileSize(uri)
     if (declaredSize != null && (declaredSize <= 0L || declaredSize > maxBytes)) {
         throw IllegalArgumentException("file_size_invalid")
     }
-    val rawName = queryDisplayName(uri)
-        ?: uri.lastPathSegment?.substringAfterLast('/')
-        ?: "upload-${System.currentTimeMillis()}"
     val fileName = rawName
         .replace("\r", "_")
         .replace("\n", "_")
@@ -7024,7 +7027,70 @@ internal fun Context.readUploadPayload(uri: Uri): UploadPayload {
     if (bytes.isEmpty()) {
         throw IllegalArgumentException("file_size_invalid")
     }
+    val mimeType = inferUploadMimeType(declaredMimeType, fileName, bytes)
+    val finalMaxBytes = if (mimeType.startsWith("audio/")) 50L * 1024L * 1024L else 20L * 1024L * 1024L
+    if (bytes.size.toLong() > finalMaxBytes) {
+        throw IllegalArgumentException("file_size_invalid")
+    }
     return UploadPayload(fileName = fileName, mimeType = mimeType, bytes = bytes)
+}
+
+/**
+ * Normalizes MIME values from Android document providers. Some providers
+ * return null or application/octet-stream even for a real image; in that case
+ * use a safe signature/extension fallback so the API can validate the upload.
+ */
+internal fun inferUploadMimeType(
+    declaredMimeType: String?,
+    fileName: String,
+    bytes: ByteArray
+): String {
+    val normalizedDeclared = declaredMimeType
+        ?.substringBefore(';')
+        ?.trim()
+        ?.lowercase(Locale.US)
+    val declared = normalizedDeclared
+        ?.let {
+            when (it) {
+                "image/jpg" -> "image/jpeg"
+                "image/x-png" -> "image/png"
+                else -> it
+            }
+        }
+        ?.takeIf {
+            it.isNotBlank() &&
+                it != "application/octet-stream" &&
+                it != "*/*" &&
+                !it.endsWith("/*")
+        }
+    if (declared != null) return declared
+
+    val signature = when {
+        bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(
+            byteArrayOf(137.toByte(), 80, 78, 71, 13, 10, 26, 10)
+        ) -> "image/png"
+        bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte() -> "image/jpeg"
+        bytes.size >= 12 && bytes.copyOfRange(0, 4).contentEquals(byteArrayOf(82, 73, 70, 70)) &&
+            bytes.copyOfRange(8, 12).contentEquals(byteArrayOf(87, 69, 66, 80)) -> "image/webp"
+        bytes.size >= 3 && bytes.copyOfRange(0, 3).contentEquals(byteArrayOf(73, 68, 51)) -> "audio/mpeg"
+        bytes.size >= 12 && bytes.copyOfRange(4, 8).contentEquals(byteArrayOf(102, 116, 121, 112)) -> "audio/mp4"
+        bytes.size >= 12 && bytes.copyOfRange(0, 4).contentEquals(byteArrayOf(82, 73, 70, 70)) &&
+            bytes.copyOfRange(8, 12).contentEquals(byteArrayOf(87, 65, 86, 69)) -> "audio/wav"
+        else -> null
+    }
+    if (signature != null) return signature
+
+    return when (fileName.substringAfterLast('.', "").lowercase(Locale.US)) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "mp3" -> "audio/mpeg"
+        "m4a", "mp4" -> "audio/mp4"
+        "wav" -> "audio/wav"
+        "txt" -> "text/plain"
+        else -> declared
+            ?: "application/octet-stream"
+    }
 }
 
 private fun InputStream.readBytesLimited(maxBytes: Long): ByteArray {

@@ -33,7 +33,9 @@
 - `GET /admin/users/moderation`、`PATCH /admin/users/:id/moderation`：用户屏蔽/封禁
 - `GET /ai/companions`、`POST /ai/companions`：陪伴对象列表与创建；名称和“对方是我的”单向关系必填，不要求对象性别，支持人物、宠物、地点或物品
 - `GET /ai/companions/:id`、`PATCH /ai/companions/:id`、`DELETE /ai/companions/:id`：读取、修改和删除陪伴对象；“父子、母女、兄弟、姐妹、祖孙、夫妻”等双向写法会被拒绝
+- `POST /ai/companions/:id/avatar`：上传并设置本人陪伴对象的头像；图片在审核期间保持私有且本人可见
 - `GET /ai/companions/:id/messages`、`POST /ai/companions/:id/messages`、`DELETE /ai/companions/:id/messages/:messageId`：陪伴对象聊天记录
+- `POST /ai/companions/:id/voice-messages`：上传 60 秒内语音，服务端转写后进入同一聊天队列并返回文字 AI 回复；语音作为私有资源保存，只有本人可读取
 - `GET /ai/companions/:id/memories`、`POST /ai/companions/:id/memories`、`PATCH /ai/companions/:id/memories/:memoryId`、`DELETE /ai/companions/:id/memories/:memoryId`：陪伴对象私有记忆 CRUD
 - `DELETE /ai/companions/:id/memories`：清空某个陪伴对象的私有记忆
 - `GET /ai/memory-settings`、`PUT /ai/memory-settings`：用户级自动记忆开关，默认关闭
@@ -77,15 +79,26 @@ ALLOWED_ORIGINS=https://api.anyibj.cn
 PAYMENT_ENABLED=false
 APEXIN_BASE_URL=https://api.apexin.ai/v1
 APEXIN_API_KEY=replace-with-apexin-api-key
-AI_MODEL=gpt-5.5
+AI_MODEL=gpt-5.6-luna
 AI_MEMORY_MODEL=gpt-5.5
+AI_VOICE_ENABLED=false
+AI_VOICE_RETAIN_AUDIO=true
+ASR_PROVIDER=tencent
+ASR_TIMEOUT_MS=60000
+TENCENT_ASR_SECRET_ID=replace-with-tencent-asr-secret-id
+TENCENT_ASR_SECRET_KEY=replace-with-tencent-asr-secret-key
+TENCENT_ASR_REGION=ap-beijing
+TENCENT_ASR_ENGINE_MODEL_TYPE=16k_zh
+TENCENT_ASR_ENDPOINT=https://asr.tencentcloudapi.com
 ```
 
-`APEXIN_API_KEY` 只允许写入服务器部署环境，禁止提交到仓库、下发给客户端或打印到日志。聊天默认使用 `gpt-5.5`。GPT 图片走 `/v1/images/generations`，Gemini 图片走 `/v1beta/models/{model}:generateContent`，两者共用上述 Apexin 地址和密钥。
+`APEXIN_API_KEY` 只允许写入服务器部署环境，禁止提交到仓库、下发给客户端或打印到日志。聊天默认使用 `gpt-5.6-luna`；自动记忆模型可由 `AI_MEMORY_MODEL` 单独配置。GPT 图片走 `/v1/images/generations`，Gemini 图片走 `/v1beta/models/{model}:generateContent`，两者共用上述 Apexin 地址和密钥。
 
 用户手动保存的对象记忆始终会用于该对象的对话；手动新增记忆不会自动打开对话记忆提取。`/ai/memory-settings` 只控制是否从后续对话中自动整理新记忆，默认关闭。
 
 聊天与头像生成会直接尝试调用 Apexin；服务器未配置 `APEXIN_API_KEY` 时，相关请求返回 `503 ai_provider_not_configured`。人物、手动记忆、历史消息和素材管理不依赖供应商密钥。
+
+语音消息默认关闭（`AI_VOICE_ENABLED=false`）。生产使用腾讯云一句话识别 `SentenceRecognition`，服务端通过 TC3-HMAC-SHA256 签名调用；Android 不保存或接触腾讯云密钥。开启前需配置 `TENCENT_ASR_SECRET_ID`、`TENCENT_ASR_SECRET_KEY`，建议普通中文使用 `16k_zh`。未配置时接口返回 `503 asr_provider_not_configured`。语音文件使用私有资产路径保存，不会进入 AI 或应用日志；删除消息、陪伴对象或账号时会进入资产删除队列。部署时必须先应用 MySQL `0010_ai_voice_messages.sql`、`0011_ai_voice_processing_claim.sql`（SQLite 对应 `0028`、`0029`），后者为跨进程重试增加持久化处理状态。
 
 迁移 `0025_ai_companion_reset.sql`（MySQL 为 `0007_ai_companion_reset.sql`）是一次性破坏性迁移：会清空旧 AI profile、陪伴人物、聊天记录、记忆和记忆开关。这是本次彻底重做的预期行为，部署前必须确认无需保留旧 AI 数据或已完成独立备份。
 

@@ -66,6 +66,6 @@ app-open-check.png
 anyi-open-check.png
 anyi-open-latest.png
 
-# Root-level visual QA exports (product assets live under app/, website/, or harmonyos/)
+# Root-level visual QA exports (product assets live under app/, website/, or huawei-harmonyos/)
 /anyi-*.png
 /app-*.png
