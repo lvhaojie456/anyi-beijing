@@ -47,6 +47,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Face
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.MoreVert
@@ -140,6 +141,7 @@ internal data class AiCompanion(
     val displayName: String,
     val relation: String,
     val chatBackgroundUrl: String?,
+    val live2dModel: String?,
     val avatarUrl: String?,
     val generated: Boolean,
     val updatedAt: Long,
@@ -370,6 +372,11 @@ internal fun AiCompanionScreen(
     var listBackgroundSaving by remember { mutableStateOf(false) }
     var chatBackgroundSaving by remember { mutableStateOf(false) }
     var voiceAvailable by remember(user.token) { mutableStateOf(false) }
+    // Immersive Live2D mode is a view over the SAME conversation state as the
+    // normal chat, so toggling it never duplicates history or the FIFO worker.
+    var immersive by rememberSaveable(user.token) { mutableStateOf(false) }
+    var showLive2dPicker by remember { mutableStateOf(false) }
+    var live2dSaving by remember { mutableStateOf(false) }
     val selected = selectedId?.let { id -> companions.firstOrNull { it.id == id } }
 
     fun conversationState(companionId: String): AiConversationState {
@@ -661,6 +668,27 @@ internal fun AiCompanionScreen(
         }
     }
 
+    fun updateLive2dModel(companion: AiCompanion, modelId: String?, onDone: () -> Unit = {}) {
+        if (live2dSaving) return
+        live2dSaving = true
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    api.updateAiCompanionLive2dModel(companion.id, modelId)
+                }
+            }.onSuccess { response ->
+                replaceCompanion(parseCompanion(response.optJSONObject("companion") ?: response))
+                updateConversationState(companion.id) { it.copy(error = "") }
+                onDone()
+            }.onFailure { failure ->
+                updateConversationState(companion.id) { state ->
+                    state.copy(error = failure.companionError("动态形象设置失败"))
+                }
+            }
+            live2dSaving = false
+        }
+    }
+
     fun updateChatBackground(companion: AiCompanion, backgroundUrl: String?) {
         if (chatBackgroundSaving) return
         chatBackgroundSaving = true
@@ -724,6 +752,7 @@ internal fun AiCompanionScreen(
     BackHandler(enabled = studioTarget != null || selected != null) {
         when {
             studioTarget != null -> studioTarget = null
+            immersive -> immersive = false
             selected != null -> {
                 selectedId = null
                 onChatStateChange(false)
@@ -754,7 +783,26 @@ internal fun AiCompanionScreen(
                 onChooseBackground = { listBackgroundPicker.launch("image/*") },
                 onClearBackground = { updateListBackground(null) }
             )
-            else -> CompanionChat(
+            else -> {
+                val boundModel = selected!!.live2dModel
+                if (immersive && boundModel != null && Live2dCatalog.find(boundModel) != null) {
+                    Live2dChatScreen(
+                        user = user,
+                        companion = selected!!,
+                        modelId = boundModel,
+                        messages = selectedConversation.messages,
+                        draft = selectedConversation.draft,
+                        loading = selectedConversation.loading,
+                        queuedCount = selectedConversation.pending.size,
+                        error = selectedConversation.error,
+                        onBack = { immersive = false },
+                        onDraftChange = { draft ->
+                            selectedId?.let { id -> updateConversationState(id) { state -> state.copy(draft = draft.take(500)) } }
+                        },
+                        onSend = ::sendMessage,
+                        onChangeAvatar = { showLive2dPicker = true }
+                    )
+                } else CompanionChat(
                 user = user,
                 companion = selected!!,
                 companions = companions,
@@ -775,9 +823,23 @@ internal fun AiCompanionScreen(
                 onStudio = { studioTarget = selected },
                 backgroundSaving = chatBackgroundSaving,
                 onChooseBackground = { chatBackgroundPicker.launch("image/*") },
-                onClearBackground = { selected?.let { updateChatBackground(it, null) } }
+                onClearBackground = { selected?.let { updateChatBackground(it, null) } },
+                onImmersive = { immersive = true },
+                onPickLive2d = { showLive2dPicker = true }
             )
+            }
         }
+    }
+
+    if (showLive2dPicker && selected != null) {
+        Live2dPickerDialog(
+            current = selected.live2dModel,
+            saving = live2dSaving,
+            onDismiss = { if (!live2dSaving) showLive2dPicker = false },
+            onPick = { modelId ->
+                updateLive2dModel(selected, modelId) { showLive2dPicker = false; if (modelId != null) immersive = true }
+            }
+        )
     }
 
     if (showEditor) {
@@ -923,7 +985,8 @@ private fun CompanionChat(
     onVoiceRecorded: (VoiceRecording) -> Unit,
     onEdit: () -> Unit,
     onStudio: () -> Unit,
-    backgroundSaving: Boolean, onChooseBackground: () -> Unit, onClearBackground: () -> Unit
+    backgroundSaving: Boolean, onChooseBackground: () -> Unit, onClearBackground: () -> Unit,
+    onImmersive: () -> Unit = {}, onPickLive2d: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
@@ -1042,6 +1105,21 @@ private fun CompanionChat(
                                     text = { Text("恢复默认背景") },
                                     leadingIcon = { Icon(Icons.Rounded.Delete, null) },
                                     onClick = { showMore = false; onClearBackground() }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text(if (companion.live2dModel != null) "沉浸模式" else "选择动态形象") },
+                                leadingIcon = { Icon(Icons.Rounded.Face, null) },
+                                onClick = {
+                                    showMore = false
+                                    if (companion.live2dModel != null) onImmersive() else onPickLive2d()
+                                }
+                            )
+                            if (companion.live2dModel != null) {
+                                DropdownMenuItem(
+                                    text = { Text("更换动态形象") },
+                                    leadingIcon = { Icon(Icons.Rounded.Edit, null) },
+                                    onClick = { showMore = false; onPickLive2d() }
                                 )
                             }
                             DropdownMenuItem(
@@ -1758,6 +1836,7 @@ private fun parseCompanion(item: JSONObject) = AiCompanion(
     displayName = item.optString("displayName", item.optString("name", "未命名对象")),
     relation = item.optString("relation"),
     chatBackgroundUrl = item.optString("chatBackgroundUrl").takeIf { it.isNotBlank() && it != "null" },
+    live2dModel = item.optString("live2dModel").takeIf { it.isNotBlank() && it != "null" },
     avatarUrl = item.optString("avatarUrl").takeIf { it.isNotBlank() && it != "null" },
     generated = item.optBoolean("generated", false),
     updatedAt = item.optLong("updatedAt").takeIf { it > 0L } ?: System.currentTimeMillis(),
@@ -1888,10 +1967,74 @@ private fun Throwable.companionError(fallback: String): String {
         detail.contains("avatar_asset_not_approved") -> "头像还在审核中，请稍后再试"
         detail.contains("avatar_asset_not_owned") -> "只能使用自己上传的头像"
         detail.contains("avatar_upload_response_invalid") -> "头像上传结果异常，请重试"
+        detail.contains("live2d_model_not_supported") -> "这个动态形象不可用，请重新选择"
         detail.contains("companion_not_found") -> "该陪伴对象已不存在"
         detail.contains("relation_direction_required") -> "请填写单向关系，例如儿子、爸爸、哥哥或妹妹"
         detail.contains("rate_limit") -> "操作太频繁，请稍后再试"
         detail.isBlank() -> fallback
         else -> "$fallback：$detail"
+    }
+}
+
+/**
+ * Grid of bundled Live2D avatars. Picking one calls onPick(modelId); the
+ * "不使用" tile calls onPick(null) to unbind.
+ */
+@Composable
+private fun Live2dPickerDialog(
+    current: String?,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onPick: (String?) -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(Modifier.fillMaxWidth().padding(16.dp), color = CompanionPaper, shape = RoundedCornerShape(16.dp), shadowElevation = 12.dp) {
+            Column(Modifier.padding(18.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("选择动态形象", color = CompanionInk, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss, enabled = !saving) { Icon(Icons.Rounded.Close, "关闭", tint = CompanionMuted) }
+                }
+                Text(
+                    "形象会绑定到这个陪伴对象，进入沉浸模式后在聊天上方显示。所有形象均为 AI 生成，不代表任何真实人物。",
+                    color = CompanionMuted, fontSize = 12.sp
+                )
+                Live2dCatalog.models.chunked(2).forEach { pair ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        pair.forEach { model ->
+                            val active = model.id == current
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable(enabled = !saving) { onPick(model.id) },
+                                color = if (active) CompanionGreen.copy(alpha = 0.14f) else Color.White,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, if (active) CompanionGreen else CompanionLine)
+                            ) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(model.title, color = CompanionInk, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                    Text(model.subtitle, color = CompanionMuted, fontSize = 11.sp)
+                                    if (active) Text("当前使用", color = CompanionGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+                if (current != null) {
+                    OutlinedButton(
+                        onClick = { onPick(null) },
+                        enabled = !saving,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = CompanionButtonShape
+                    ) { Text("不使用动态形象") }
+                }
+                if (saving) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(20.dp), color = CompanionGreen, strokeWidth = 2.dp)
+                    }
+                }
+            }
+        }
     }
 }

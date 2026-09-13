@@ -117,6 +117,15 @@ class AnyiApiClient(
         )
     }
 
+    fun updateAiCompanionLive2dModel(companionId: String, live2dModel: String?): JSONObject {
+        return request(
+            method = "PATCH",
+            path = "/ai/companions/$companionId/live2d",
+            authorized = true,
+            body = JSONObject().put("live2dModel", live2dModel ?: JSONObject.NULL)
+        )
+    }
+
     fun uploadAiCompanionChatBackground(companionId: String, file: UploadPayload): JSONObject {
         return multipartRequest(
             path = "/ai/companions/$companionId/background",

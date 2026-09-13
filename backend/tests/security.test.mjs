@@ -210,6 +210,9 @@ function aiBackgroundDatabase({ assetOwner = "user-1", assetMimeType = "image/pn
           if (query.startsWith("UPDATE ai_companions SET chat_background_url")) {
             companion = { ...companion, chat_background_url: values[0], updated_at: values[1] };
           }
+          if (query.startsWith("UPDATE ai_companions SET live2d_model")) {
+            companion = { ...companion, live2d_model: values[0], updated_at: values[1] };
+          }
           if (query.startsWith("INSERT INTO asset_delete_queue")) queuedDeletes.push(values[2]);
           return { success: true, meta: { changes: 1 } };
         }
@@ -367,6 +370,42 @@ test("AI list and chat backgrounds are independent private owned images", async 
   ), testEnv({ DB: db }));
   assert.equal(cleared.status, 200);
   assert.equal((await cleared.json()).companion.chatBackgroundUrl, null);
+});
+
+test("companion Live2D avatar binding accepts only bundled model ids", async () => {
+  const db = aiBackgroundDatabase();
+  const bound = await app.fetch(new Request(
+    "https://api.anyibj.cn/ai/companions/companion-1/live2d",
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${userToken()}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ live2dModel: "Kei" })
+    }
+  ), testEnv({ DB: db }));
+  assert.equal(bound.status, 200);
+  assert.equal((await bound.json()).companion.live2dModel, "kei");
+
+  const rejected = await app.fetch(new Request(
+    "https://api.anyibj.cn/ai/companions/companion-1/live2d",
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${userToken()}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ live2dModel: "../etc/passwd" })
+    }
+  ), testEnv({ DB: db }));
+  assert.equal(rejected.status, 400);
+  assert.equal((await rejected.json()).error, "live2d_model_not_supported");
+
+  const cleared = await app.fetch(new Request(
+    "https://api.anyibj.cn/ai/companions/companion-1/live2d",
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${userToken()}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ live2dModel: null })
+    }
+  ), testEnv({ DB: db }));
+  assert.equal(cleared.status, 200);
+  assert.equal((await cleared.json()).companion.live2dModel, null);
 });
 
 test("clearing a chat background never queues an asset still used by the list", async () => {
