@@ -139,6 +139,8 @@ ai_memory_items
 ai_memory_settings
 ```
 
+语音消息使用 `ai_chat_messages` 中的 `message_type`、`duration_ms`、`audio_url` 等字段，对应 MySQL 迁移为 `0010_ai_voice_messages.sql` 和 `0011_ai_voice_processing_claim.sql`（SQLite 为 `0028_ai_voice_messages.sql` 和 `0029_ai_voice_processing_claim.sql`）。第二个迁移增加跨进程幂等处理占位和租约，必须与第一迁移一起应用。生产 ASR 使用腾讯云一句话识别 `SentenceRecognition`；`.env` 配置 `ASR_PROVIDER=tencent`、CAM 子账号密钥、地域和 `16k_zh` 引擎。不要把 ASR 密钥写入 Android、Git、日志或更新日志。
+
 首次部署新版时，MySQL 迁移 `0007_ai_companion_reset.sql` 会一次性清空旧 AI profile、人物、聊天和记忆。部署前必须确认无需保留，或先做独立备份。
 
 备份服务：
@@ -374,7 +376,8 @@ sudo journalctl -u anyi-memorial-api -n 80 --no-pager
 - MySQL 迁移记录已更新。
 - 上传目录和 `.env` 没有被覆盖。
 - 人物、聊天和手动记忆账号隔离正常；自动整理新记忆默认关闭。
-- `APEXIN_API_KEY` 仅存在服务器 `.env`，聊天使用 `gpt-5.5`，GPT/Gemini 图片模型分别走各自接口。
+- `APEXIN_API_KEY` 仅存在服务器 `.env`，聊天使用 `gpt-5.6-luna`，GPT/Gemini 图片模型分别走各自接口。
+- 语音功能仍按需保持 `AI_VOICE_ENABLED=false`；若启用，确认 ASR 配置已验证、MySQL `0010` 与 `0011`（或 SQLite `0028` 与 `0029`）已应用，且语音资产可由用户删除。
 - 数据库和 uploads 备份任务成功。
 - Android 下载地址返回预期 APK，而不是临时 unsigned 构建产物。
 

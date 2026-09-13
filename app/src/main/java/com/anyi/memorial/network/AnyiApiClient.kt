@@ -45,34 +45,40 @@ class AnyiApiClient(
 
     fun createAiCompanion(
         displayName: String,
-        relation: String
+        relation: String,
+        avatarUrl: String? = null
     ): JSONObject {
         require(displayName.isNotBlank()) { "ai_companion_name_required" }
         require(relation.isNotBlank()) { "ai_companion_relation_required" }
+        val body = JSONObject()
+            .put("displayName", displayName)
+            .put("relation", relation)
+        if (!avatarUrl.isNullOrBlank()) body.put("avatarUrl", avatarUrl)
         return request(
             method = "POST",
             path = "/ai/companions",
             authorized = true,
-            body = JSONObject()
-                .put("displayName", displayName)
-                .put("relation", relation)
+            body = body
         )
     }
 
     fun updateAiCompanion(
         companionId: String,
         displayName: String,
-        relation: String
+        relation: String,
+        avatarUrl: String? = null
     ): JSONObject {
         require(displayName.isNotBlank()) { "ai_companion_name_required" }
         require(relation.isNotBlank()) { "ai_companion_relation_required" }
+        val body = JSONObject()
+            .put("displayName", displayName)
+            .put("relation", relation)
+        if (!avatarUrl.isNullOrBlank()) body.put("avatarUrl", avatarUrl)
         return request(
             method = "PATCH",
             path = "/ai/companions/$companionId",
             authorized = true,
-            body = JSONObject()
-                .put("displayName", displayName)
-                .put("relation", relation)
+            body = body
         )
     }
 
@@ -81,6 +87,24 @@ class AnyiApiClient(
             method = "DELETE",
             path = "/ai/companions/$companionId",
             authorized = true
+        )
+    }
+
+    fun uploadAiCompanionAvatar(
+        companionId: String,
+        file: UploadPayload,
+        uploadRequestId: String? = null
+    ): JSONObject {
+        val fields = if (uploadRequestId.isNullOrBlank()) {
+            emptyMap()
+        } else {
+            mapOf("uploadRequestId" to uploadRequestId)
+        }
+        return multipartRequest(
+            path = "/ai/companions/$companionId/avatar",
+            fields = fields,
+            files = listOf(file),
+            idempotencyKey = uploadRequestId
         )
     }
 
@@ -115,6 +139,25 @@ class AnyiApiClient(
             path = "/ai/companions/$companionId/messages",
             authorized = true,
             body = JSONObject().put("content", content)
+        )
+    }
+
+    fun sendAiCompanionVoiceMessage(
+        companionId: String,
+        audio: UploadPayload,
+        durationMs: Long,
+        uploadRequestId: String
+    ): JSONObject {
+        require(durationMs > 0L) { "voice_duration_invalid" }
+        require(uploadRequestId.isNotBlank()) { "upload_request_id_required" }
+        return multipartRequest(
+            path = "/ai/companions/$companionId/voice-messages",
+            fields = mapOf(
+                "durationMs" to durationMs.toString(),
+                "uploadRequestId" to uploadRequestId
+            ),
+            files = listOf(audio),
+            idempotencyKey = uploadRequestId
         )
     }
 
@@ -681,7 +724,7 @@ class AnyiApiClient(
     private fun readTimeoutFor(path: String, method: String): Int {
         return when {
             path == "/assets" || path.endsWith("/assets") || path.endsWith("/acceptance") -> 120_000
-            path.endsWith("/messages") || path.endsWith("/avatar/studio") -> 120_000
+            path.endsWith("/messages") || path.endsWith("/voice-messages") || path.endsWith("/avatar") || path.endsWith("/avatar/studio") -> 120_000
             else -> 30_000
         }
     }

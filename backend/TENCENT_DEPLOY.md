@@ -82,12 +82,22 @@ PUBLIC_ASSET_BASE_URL=https://api.anyibj.cn
 ALLOWED_ORIGINS=https://api.anyibj.cn
 APEXIN_BASE_URL=https://api.apexin.ai/v1
 APEXIN_API_KEY=replace-with-apexin-api-key
-AI_MODEL=gpt-5.5
+AI_MODEL=gpt-5.6-luna
 AI_MEMORY_MODEL=gpt-5.5
+AI_VOICE_ENABLED=false
+AI_VOICE_RETAIN_AUDIO=true
+# 腾讯云一句话识别；密钥应来自仅有 ASR 权限的 CAM 子账号
+ASR_PROVIDER=tencent
+ASR_TIMEOUT_MS=60000
+TENCENT_ASR_SECRET_ID=replace-with-tencent-asr-secret-id
+TENCENT_ASR_SECRET_KEY=replace-with-tencent-asr-secret-key
+TENCENT_ASR_REGION=ap-beijing
+TENCENT_ASR_ENGINE_MODEL_TYPE=16k_zh
+TENCENT_ASR_ENDPOINT=https://asr.tencentcloudapi.com
 PAYMENT_ENABLED=false
 ```
 
-`APEXIN_API_KEY` 只能保存在服务器 `.env`，不得写入 Android、Git、日志或接口响应。聊天与头像生成会直接调用 Apexin；未配置密钥时相关接口返回 `503 ai_provider_not_configured`。systemd 单元不会覆盖 `.env` 中的 Apexin 配置。
+`APEXIN_API_KEY`、`TENCENT_ASR_SECRET_ID` 和 `TENCENT_ASR_SECRET_KEY` 只能保存在服务器 `.env`，不得写入 Android、Git、日志或接口响应。聊天与头像生成会直接调用 Apexin；语音默认关闭，未配置腾讯云 ASR 时返回 `503 asr_provider_not_configured`。systemd 单元不会覆盖 `.env` 中的供应商配置。
 
 生成随机 `AUTH_SECRET`：
 

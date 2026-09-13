@@ -3,7 +3,10 @@ package com.anyi.memorial.privacy
 import android.content.Context
 
 object PrivacyConsentStore {
-    const val POLICY_VERSION = "2026-05-09"
+    // Bumped when the voice-message processing disclosure was added. Existing
+    // users must review the updated privacy text before any network service is
+    // started again.
+    const val POLICY_VERSION = "2026-09-01"
 
     private const val STORE_NAME = "anyi_memorial_app"
     private const val KEY_VERSION = "privacy_consent_version"

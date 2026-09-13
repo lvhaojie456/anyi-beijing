@@ -73,6 +73,7 @@ pending_payment -> pending_order -> accepted -> in_progress -> pending_acceptanc
 - 深色模式、不同屏幕尺寸、首次安装和升级安装
 - Release AAB 安装、崩溃日志、隐私弹窗、测试账号
 - 验证人物记忆跨次启动恢复、手动新增/查看/单条删除和敏感信息过滤；如开启自动整理，再单独验证开关与“忘记”指令
+- 若启用 AI 语音：验证麦克风首次授权、按住发送/上滑取消、语音播放、转文字、弱网重试、删除语音和 ASR 未配置时的降级提示；确认语音供应商、处理地域、保存期限和单独授权已公示
 - 验证 `gpt-image-2` 走 Image API，六个 Gemini 图片模型走 `generateContent`，并确认客户端拿不到 Apexin 密钥
 
 ## 上线前不可省略
@@ -83,4 +84,5 @@ pending_payment -> pending_order -> accepted -> in_progress -> pending_acceptanc
 - 隐私政策和商店隐私清单必须明确 Apexin 处理的人物设定、相关记忆、对话和头像提示词。
 - MySQL 数据库和上传目录必须配置定时备份。
 - AI 人物记忆必须支持用户查看和单条删除，并在删除人物或注销账号时一并删除。
+- AI 语音必须默认关闭，启用前配置经核实的 ASR 服务，并应用对应的语音字段与处理租约迁移（MySQL `0010`、`0011`；SQLite `0028`、`0029`）；原始录音、转写和私有语音资产的保存与删除策略必须经过隐私审查。
 - 管理后台建议独立成后台域名，App 内仅保留入口。
