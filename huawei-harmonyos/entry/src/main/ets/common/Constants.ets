@@ -37,7 +37,6 @@ export const LEGAL_PRIVACY_URL: string = `${API_BASE_URL}/legal/privacy`;
 export const LEGAL_TERMS_URL: string = `${API_BASE_URL}/legal/terms`;
 export const LEGAL_AI_URL: string = `${API_BASE_URL}/legal/ai-disclaimer`;
 export const ADMIN_URL: string = `${API_BASE_URL}/admin`;
-export const DEFAULT_DIGITAL_HUMAN_URL: string = `${API_BASE_URL}/vtuber/`;
 export const MAX_IMAGE_BYTES: number = 20 * 1024 * 1024;
 
 export function absoluteAssetUrl(value: string): string {

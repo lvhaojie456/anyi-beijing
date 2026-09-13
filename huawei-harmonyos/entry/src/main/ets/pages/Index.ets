@@ -4,7 +4,6 @@ import { AppUser, appUserFromProfile } from '../models/Models';
 import { AnyiApiClient, ApiError } from '../services/ApiClient';
 import { SessionStore } from '../services/SessionStore';
 import { AuthPage } from './AuthPage';
-import { CompanionPage } from './tabs/CompanionPage';
 import { CommunityPage } from './tabs/CommunityPage';
 import { HallPage } from './tabs/HallPage';
 import { ProfilePage } from './tabs/ProfilePage';
@@ -24,7 +23,6 @@ struct Index {
   private store: SessionStore | undefined = undefined;
   private tabs: Array<TabItem> = [
     { title: '纪念馆', icon: '云' },
-    { title: 'AI陪伴', icon: '伴' },
     { title: '社区', icon: '社' },
     { title: '我的', icon: '我' }
   ];
@@ -127,8 +125,6 @@ struct Index {
           if (this.activeTab === 0) {
             HallPage({ user: this.currentUser as AppUser })
           } else if (this.activeTab === 1) {
-            CompanionPage({ user: this.currentUser as AppUser })
-          } else if (this.activeTab === 2) {
             CommunityPage({ user: this.currentUser as AppUser })
           } else {
             ProfilePage({
