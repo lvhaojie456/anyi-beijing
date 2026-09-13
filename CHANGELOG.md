@@ -35,11 +35,13 @@
 
 ### 移除
 
-- 无。
+- 清理 `app/src/main/java/com/anyi/memorial/MainActivity.kt` 中 5 个未使用的 import：`rememberLazyListState`、`Icons.AutoMirrored.Rounded.Send`、`Checkbox`、`Switch`、`graphicsLayer`。
+- 移除已退役数字人前端残留在 `isCacheableCloudResource` 中的缓存放行项：`/vtuber/`、`/live2d-models/` 两个路径前缀，以及 `.moc3`、`.wasm`、`.atlas`、`.skel` 四个扩展名。App 中没有任何代码构造这些 URL，后端也已将 `/vtuber` 与 `/vtuber/` 返回 404；该函数只是磁盘缓存白名单，删除后仅不再缓存这些类型，不影响任何正常加载。
+- 删除根目录两个与官网资源完全重复的图片：`source_app_icon.png`（1254×1254，1.4 MB）与 `AnyiMemorial-download-qr.png`。二者分别与 `website/assets/app-icon.png`、`website/assets/download-qr.png` 的 SHA-256 完全一致，且没有任何构建脚本、Gradle 配置或代码引用根目录副本。官网仍使用 `website/assets/` 下的同名文件，视觉无变化。
 
 ### 运维/部署
 
-- 无。
+- 无。本次不涉及数据库迁移、环境变量或服务发布，无需重新部署后端；Android 侧为纯清理，不改变任何用户可见行为。
 
 ## 当前发布（2026-09-08）
 
