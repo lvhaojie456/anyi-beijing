@@ -129,6 +129,7 @@ class AnyiApiClientRequestIdTest {
             capturedBody = exchange.requestBody.bufferedReader().use { it.readText() }
         }
 
+        HttpMethods.allowPatch()
         val response = AnyiApiClient(
             baseUrl = "http://127.0.0.1:${runningServer.address.port}",
             tokenProvider = { "token" }
@@ -149,6 +150,7 @@ class AnyiApiClientRequestIdTest {
             capturedBody = exchange.requestBody.bufferedReader().use { it.readText() }
         }
 
+        HttpMethods.allowPatch()
         AnyiApiClient(
             baseUrl = "http://127.0.0.1:${runningServer.address.port}",
             tokenProvider = { "token" }

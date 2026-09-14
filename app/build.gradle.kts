@@ -77,6 +77,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    testOptions {
+        unitTests.all {
+            // The desktop JVM's HttpURLConnection rejects PATCH outright, while
+            // Android's OkHttp-backed implementation accepts it. Unit tests that
+            // drive a real PATCH request need reflective access to java.net to
+            // widen that allow-list; see HttpMethods in the network test source.
+            it.jvmArgs("--add-opens", "java.base/java.net=ALL-UNNAMED")
+        }
+    }
 }
 
 dependencies {
