@@ -24,22 +24,39 @@
 ### 新增
 
 - 新增 `docs/codex-handover.md`，记录当前 Android、后端、腾讯云生产边界，以及照片数字人视频通话的实施路线和接手步骤。
+- Android 新增 Live2D 动态形象与沉浸式聊天模式。APK 内置 6 个 Live2D Cubism 4 官方样例模型（Kei、Izumi、Haru、Hiyori、Tororo 白猫、Hijiki 黑猫，约 17 MB，已剔除示例语音与编辑器源文件），用户在聊天页"更多"菜单里为陪伴对象选择一个形象并绑定，进入"沉浸模式"后形象显示在聊天上方，AI 回复到达时播放说话动画，下方沿用同一条文字聊天流。形象与陪伴对象一一绑定，切换对象自动切换形象。
+- 新增 `Live2dAvatarView.kt`：用 Android `WebView` + `WebViewAssetLoader` 从 APK 资产渲染 Live2D（pixi.js + pixi-live2d-display + Cubism Core，全部本地打包，不访问网络；禁用文件与内容访问，拒绝跳离资产域）。新增 `Live2dChatScreen.kt` 沉浸式聊天页，复用 `AiCompanionScreen` 现有的消息列表、草稿与按对象 FIFO 发送队列，不新增任何会话状态。
+- 后端新增 `PATCH /ai/companions/:id/live2d`，请求体 `live2dModel` 为白名单内的模型 id 或 `null`（解绑）；非法 id 返回 `400 live2d_model_not_supported`。`GET /ai/companions` 与单个对象响应新增 `live2dModel` 字段。服务端只保存 id，不托管任何模型文件。
+- 新增 `androidx.webkit:webkit:1.14.0` 依赖（`WebViewAssetLoader`），这是本次唯一新增的第三方依赖。
+- 新增后端测试 `companion Live2D avatar binding accepts only bundled model ids`（绑定、非法 id 拒绝、解绑三种情况）和 Android 单元测试 `updateAiCompanionLive2dModel_*`（PATCH 方法、JSON 字段、`null` 解绑）。
+- 沉浸模式页面固定显示"AI 生成形象"标识，形象选择弹窗注明"所有形象均为 AI 生成，不代表任何真实人物"。
 
 ### 修改
 
 - 根目录 README 增加 Codex 项目交接文档入口。
+- `AiCompanion` 数据类新增 `live2dModel: String?`；`AiCompanionRow` 与 `serializeAiCompanion` 同步新增 `live2d_model` / `live2dModel`。
+- 聊天页"更多"菜单新增"选择动态形象"（未绑定时）/ "沉浸模式" + "更换动态形象"（已绑定时）两项。
 
 ### 修复
 
-- 无。
+- 修复 Live2D 绑定的两个 Android 单元测试在本机 JVM 上失败（`ProtocolException: Invalid HTTP method: PATCH`）。原因是桌面 JDK 的 `HttpURLConnection` 用一个私有静态白名单校验请求方法，该白名单不含 `PATCH`；Android 的 `HttpURLConnection` 由 OkHttp 实现，可正常发送 `PATCH`。即客户端代码在真机上正确，只有本机测试 JVM 无法表达该方法。已新增测试专用辅助 `app/src/test/java/com/anyi/memorial/network/HttpMethods.kt`，通过反射把白名单中未使用的 `TRACE` 槽位替换为 `PATCH`（不改变数组长度和其他槽位），并在 `app/build.gradle.kts` 的 `testOptions` 为单元测试加上 `--add-opens java.base/java.net=ALL-UNNAMED`。生产代码与 `AnyiApiClient` 未做任何修改。此前 8 个 `PATCH` 调用点从未被单元测试用真实 socket 覆盖，所以该限制一直没有暴露。
 
 ### 移除
 
-- 无。
+- 清理 `app/src/main/java/com/anyi/memorial/MainActivity.kt` 中 5 个未使用的 import：`rememberLazyListState`、`Icons.AutoMirrored.Rounded.Send`、`Checkbox`、`Switch`、`graphicsLayer`。
+- 移除已退役数字人前端残留在 `isCacheableCloudResource` 中的缓存放行项：`/vtuber/`、`/live2d-models/` 两个路径前缀，以及 `.moc3`、`.wasm`、`.atlas`、`.skel` 四个扩展名。App 中没有任何代码构造这些 URL，后端也已将 `/vtuber` 与 `/vtuber/` 返回 404；该函数只是磁盘缓存白名单，删除后仅不再缓存这些类型，不影响任何正常加载。
+- 删除根目录两个与官网资源完全重复的图片：`source_app_icon.png`（1254×1254，1.4 MB）与 `AnyiMemorial-download-qr.png`。二者分别与 `website/assets/app-icon.png`、`website/assets/download-qr.png` 的 SHA-256 完全一致，且没有任何构建脚本、Gradle 配置或代码引用根目录副本。官网仍使用 `website/assets/` 下的同名文件，视觉无变化。
+- 移除鸿蒙端整个 AI 陪伴页：`huawei-harmonyos/entry/src/main/ets/pages/tabs/CompanionPage.ets`（485 行）。该页面调用的 5 个接口 `/app/digital-human/chat|messages|memories|memory-settings` 后端已不存在，生产实测全部返回 404；页面还从 `/app/config` 读取后端已不再返回的 `digitalHuman` 字段，导致功能开关恒为关闭。鸿蒙端标签页由 4 个减为 3 个（纪念馆、人文社区、个人中心），`Index.ets` 的 `activeTab` 索引同步由 0/1/2/3 改为 0/1/2。
+- 移除鸿蒙端随上述页面一并失效的内容：`ApiClient.ets` 的 5 个 digital-human 方法和 `DigitalHumanPayload` 接口、`Constants.ets` 的 `DEFAULT_DIGITAL_HUMAN_URL`、`Models.ets` 的 7 个死类型（`DigitalHumanMessage`、`DigitalHumanMessagesResponse`、`DigitalHumanChatResponse`、`DigitalHumanConfig`、`AiMemory`、`AiMemoriesResponse`、`AiMemorySettingsResponse`），以及三张不再被引用的图片 `anyi_digital_grandma.png`（1.2 MB）、`anyi_digital_grandpa.png`（1.1 MB）、`anyi_ai_page_bg.png`（319 KB）。
+- 修正 `AppConfigResponse` 类型：原先只声明 `digitalHuman` 字段，与后端实际返回的 `wechat`/`payments`/`ai` 结构不符，已按生产响应重建为 `WechatConfig`/`PaymentsConfig`/`AiConfig`。
+- 更新 `huawei-harmonyos/README.md`：删除 "ArkWeb：现有 2D 数字人页面" 与功能表里的 AI 陪伴行，并说明该页被移除的原因。
 
 ### 运维/部署
 
-- 无。
+- 新增数据库迁移：MySQL `0012_ai_companion_live2d.sql`、SQLite `0030_ai_companion_live2d.sql`，为 `ai_companions` 增加可空列 `live2d_model`。为纯加列、可空、无默认值，不影响现有数据；服务启动时自动应用。回滚只需 `ALTER TABLE ai_companions DROP COLUMN live2d_model`，客户端对缺失字段按未绑定处理。
+- 本次不涉及环境变量或密钥变更。生产尚未部署，需先在本地完成 Android 构建与真机验收再发布。
+- 授权说明：6 个模型均受 Live2D《免费素材许可协议》v1.6 约束，"一般用户/小规模企业可用于任何营利或非营利目的"，Cubism Core 文件头标注为 Redistributable Code，当前个人使用合规。若未来年销售额达到 1000 万日元或以商业形式发行，需另行取得 Live2D 出版许可并复核形象授权，详见项目记忆 `anyi-live2d-licensing`。
+- 补充说明：本次仅删除鸿蒙端代码与资源。生产服务器上的 `open-llm-vtuber.service` 仍为 inactive/disabled 状态，nginx 对 `/vtuber`、`/live2d-models/`、`/tts-ws` 等的 404 拦截保持不变，本次未改动服务器。
 
 ## 当前发布（2026-09-08）
 

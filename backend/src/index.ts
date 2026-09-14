@@ -241,6 +241,7 @@ type AiCompanionRow = {
   gender: string;
   relation: string;
   chat_background_url?: string | null;
+  live2d_model?: string | null;
   avatar_url: string | null;
   smile_avatar_url: string | null;
   avatar_motion_json: string;
@@ -716,6 +717,9 @@ app.post("/crash-reports", requireAuth, async (c) => {
 });
 
 const aiMemoryTypes: readonly AiMemoryType[] = ["profile", "preference", "event", "boundary", "story", "fact"];
+// Live2D avatar ids bundled in the Android APK under assets/live2d/models/<id>/.
+// Keep in sync with the client's Live2dCatalog; the server never serves these files.
+const live2dModelIds: ReadonlySet<string> = new Set(["kei", "izumi", "haru", "hiyori", "tororo", "hijiki"]);
 const aiMemoryMaxContentLength = 240;
 const aiMemoryMaxKeyLength = 128;
 const aiMemoryPromptLimit = 8;
@@ -2158,6 +2162,23 @@ app.patch("/ai/companions/:id/background", requireAuth, async (c) => {
   await safelyQueueReplacedBackground(
     c, companion.chat_background_url || null, backgroundUrl, user.id, "ai_chat_background_replaced"
   );
+  return c.json({ companion: serializeAiCompanion(await loadAiCompanionRow(c, companion.id)) });
+});
+
+// Bind a bundled Live2D avatar to the companion. Models ship inside the Android
+// APK, so the server only stores an allow-listed id; it never serves model files.
+app.patch("/ai/companions/:id/live2d", requireAuth, async (c) => {
+  const companion = await loadAiCompanionRow(c, c.req.param("id"));
+  const user = c.get("user");
+  const body = await parseJson(c);
+  const raw = readString(body, "live2dModel", { max: 32 });
+  const live2dModel = raw ? raw.trim().toLowerCase() : null;
+  if (live2dModel !== null && !live2dModelIds.has(live2dModel)) {
+    throw new ApiError(400, "live2d_model_not_supported", { allowed: [...live2dModelIds] });
+  }
+  await c.env.DB.prepare(
+    "UPDATE ai_companions SET live2d_model = ?, updated_at = ? WHERE id = ? AND user_id = ?"
+  ).bind(live2dModel, new Date().toISOString(), companion.id, user.id).run();
   return c.json({ companion: serializeAiCompanion(await loadAiCompanionRow(c, companion.id)) });
 });
 
@@ -6286,6 +6307,7 @@ function serializeAiCompanion(row: AiCompanionRow) {
     displayName: row.display_name,
     relation: row.relation,
     chatBackgroundUrl: row.chat_background_url || null,
+    live2dModel: row.live2d_model || null,
     avatarUrl: row.avatar_url,
     generated: Boolean(row.generated),
     latestMessage: row.latest_message || "",

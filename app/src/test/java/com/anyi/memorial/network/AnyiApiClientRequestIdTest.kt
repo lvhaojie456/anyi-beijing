@@ -118,6 +118,50 @@ class AnyiApiClientRequestIdTest {
     }
 
     @Test
+    fun updateAiCompanionLive2dModel_sendsModelIdAsJsonPatch() {
+        var capturedMethod = ""
+        var capturedBody = ""
+        val runningServer = startServer(
+            "/ai/companions/companion-1/live2d",
+            """{"companion":{"id":"companion-1","live2dModel":"kei"}}"""
+        ) { exchange ->
+            capturedMethod = exchange.requestMethod
+            capturedBody = exchange.requestBody.bufferedReader().use { it.readText() }
+        }
+
+        HttpMethods.allowPatch()
+        val response = AnyiApiClient(
+            baseUrl = "http://127.0.0.1:${runningServer.address.port}",
+            tokenProvider = { "token" }
+        ).updateAiCompanionLive2dModel("companion-1", "kei")
+
+        assertEquals("PATCH", capturedMethod)
+        assertEquals("kei", JSONObject(capturedBody).getString("live2dModel"))
+        assertEquals("kei", response.getJSONObject("companion").getString("live2dModel"))
+    }
+
+    @Test
+    fun updateAiCompanionLive2dModel_sendsJsonNullToUnbind() {
+        var capturedBody = ""
+        val runningServer = startServer(
+            "/ai/companions/companion-1/live2d",
+            """{"companion":{"id":"companion-1","live2dModel":null}}"""
+        ) { exchange ->
+            capturedBody = exchange.requestBody.bufferedReader().use { it.readText() }
+        }
+
+        HttpMethods.allowPatch()
+        AnyiApiClient(
+            baseUrl = "http://127.0.0.1:${runningServer.address.port}",
+            tokenProvider = { "token" }
+        ).updateAiCompanionLive2dModel("companion-1", null)
+
+        val body = JSONObject(capturedBody)
+        assertEquals(true, body.has("live2dModel"))
+        assertEquals(true, body.isNull("live2dModel"))
+    }
+
+    @Test
     fun sendAiCompanionVoiceMessage_sendsAudioAndRequestMetadata() {
         var capturedHeader = ""
         var capturedBody = ""

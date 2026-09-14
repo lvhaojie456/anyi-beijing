@@ -69,3 +69,6 @@ anyi-open-latest.png
 # Root-level visual QA exports (product assets live under app/, website/, or huawei-harmonyos/)
 /anyi-*.png
 /app-*.png
+
+# Local Live2D preview scratch (not part of the product)
+/tmp-live2d-preview/

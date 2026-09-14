@@ -3,8 +3,6 @@ import { http } from '@kit.NetworkKit';
 import { API_BASE_URLS, MAX_IMAGE_BYTES } from '../common/Constants';
 import {
   ApiErrorPayload,
-  AiMemoriesResponse,
-  AiMemorySettingsResponse,
   AppConfigResponse,
   AssetResponse,
   AuthResponse,
@@ -14,8 +12,6 @@ import {
   CommunityPostResponse,
   CommunityPostsResponse,
   CommunityVolunteerResponse,
-  DigitalHumanChatResponse,
-  DigitalHumanMessagesResponse,
   FlowerResponse,
   FruitResponse,
   HealthResponse,
@@ -64,11 +60,6 @@ interface CommunityPostPayload {
 
 interface ContentPayload {
   content: string;
-}
-
-interface DigitalHumanPayload {
-  characterId: string;
-  message: string;
 }
 
 interface VolunteerApplicationPayload {
@@ -341,32 +332,6 @@ export class AnyiApiClient {
     const payload: VolunteerReviewPayload = { status };
     return this.request<VolunteerApplicationResponse>(http.RequestMethod.PUT,
       `/community/volunteer/applications/${applicationId}`, payload, true);
-  }
-
-  digitalHumanChat(characterId: string, message: string): Promise<DigitalHumanChatResponse> {
-    const payload: DigitalHumanPayload = { characterId, message };
-    return this.request<DigitalHumanChatResponse>(http.RequestMethod.POST,
-      '/app/digital-human/chat', payload, true, 60000);
-  }
-
-  listDigitalHumanMessages(characterId: string): Promise<DigitalHumanMessagesResponse> {
-    return this.request<DigitalHumanMessagesResponse>(http.RequestMethod.GET,
-      `/app/digital-human/messages?characterId=${characterId}`, undefined, true);
-  }
-
-  listDigitalHumanMemories(characterId: string): Promise<AiMemoriesResponse> {
-    return this.request<AiMemoriesResponse>(http.RequestMethod.GET,
-      `/app/digital-human/memories?characterId=${characterId}`, undefined, true);
-  }
-
-  digitalHumanMemorySettings(): Promise<AiMemorySettingsResponse> {
-    return this.request<AiMemorySettingsResponse>(http.RequestMethod.GET,
-      '/app/digital-human/memory-settings', undefined, true);
-  }
-
-  setDigitalHumanMemoryEnabled(enabled: boolean): Promise<AiMemorySettingsResponse> {
-    return this.request<AiMemorySettingsResponse>(http.RequestMethod.PUT,
-      '/app/digital-human/memory-settings', { enabled }, true);
   }
 
   async uploadImage(scope: string, uri: string, idempotencyKey: string = ''): Promise<AssetResponse> {

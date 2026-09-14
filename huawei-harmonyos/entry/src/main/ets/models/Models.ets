@@ -184,53 +184,27 @@ export interface VolunteerApplicationsResponse {
   applications: Array<VolunteerApplication>;
 }
 
-export interface DigitalHumanMessage {
-  id: string;
-  sender: string;
-  content: string;
-  createdAt: number;
-}
-
-export interface AiMemory {
-  id: string;
-  companionKey: string;
-  memoryType: string;
-  memoryKey: string;
-  content: string;
-  confidence: number;
-  importance: number;
-  createdAt: number;
-  updatedAt: number;
-  expiresAt?: number | null;
-}
-
-export interface DigitalHumanMessagesResponse {
-  messages: Array<DigitalHumanMessage>;
-}
-
-export interface AiMemoriesResponse {
-  memories: Array<AiMemory>;
-}
-
-export interface AiMemorySettingsResponse {
+export interface WechatConfig {
   enabled: boolean;
-  consentedAt?: string | null;
 }
 
-export interface DigitalHumanChatResponse {
-  characterId: string;
-  model: string;
-  message: DigitalHumanMessage;
-  memories?: Array<AiMemory>;
-}
-
-export interface DigitalHumanConfig {
+export interface PaymentsConfig {
   enabled: boolean;
-  url: string;
+}
+
+export interface AiVoiceConfig {
+  enabled: boolean;
+  asrConfigured: boolean;
+}
+
+export interface AiConfig {
+  voice: AiVoiceConfig;
 }
 
 export interface AppConfigResponse {
-  digitalHuman: DigitalHumanConfig;
+  wechat: WechatConfig;
+  payments: PaymentsConfig;
+  ai: AiConfig;
 }
 
 export interface Asset {

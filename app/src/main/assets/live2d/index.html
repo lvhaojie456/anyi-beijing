@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Live2D</title>
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; background:transparent; overflow:hidden; }
+  canvas { width:100%; height:100%; display:block; touch-action:none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="runtime/live2dcubismcore.min.js"></script>
+<script src="runtime/pixi.min.js"></script>
+<script src="runtime/cubism4.min.js"></script>
+<script>
+// Bridge contract with Kotlin (Live2dAvatarView):
+//   Kotlin -> JS : window.anyiLive2d.load(modelId)      load a bundled model
+//                  window.anyiLive2d.speak(text)         nod + talk animation
+//                  window.anyiLive2d.idle()              return to idle
+//                  window.anyiLive2d.setLipSync(0..1)    manual mouth openness
+//   JS -> Kotlin : AndroidBridge.onReady(modelId)        model loaded
+//                  AndroidBridge.onError(message)        load failed
+(function () {
+  const canvas = document.getElementById('c');
+  const app = new PIXI.Application({
+    view: canvas, autoStart: true, resizeTo: window,
+    backgroundAlpha: 0, antialias: true, resolution: Math.min(window.devicePixelRatio || 1, 2), autoDensity: true
+  });
+  let model = null;
+  let talkTimer = null;
+  let lipTarget = 0;
+
+  function bridge(fn, arg) {
+    try { if (window.AndroidBridge && window.AndroidBridge[fn]) window.AndroidBridge[fn](arg == null ? '' : String(arg)); } catch (e) {}
+  }
+
+  function fit() {
+    if (!model) return;
+    const pw = app.renderer.width / app.renderer.resolution;
+    const ph = app.renderer.height / app.renderer.resolution;
+    const im = model.internalModel;
+    const ow = im.originalWidth || im.width || 1, oh = im.originalHeight || im.height || 1;
+    const scale = Math.min(pw / ow, ph / oh) * 0.98;
+    model.scale.set(scale);
+    model.anchor.set(0.5, 0.42);
+    model.position.set(pw / 2, ph * 0.46);
+  }
+  window.addEventListener('resize', fit);
+
+  function setParam(id, v) {
+    try {
+      const core = model && model.internalModel && model.internalModel.coreModel;
+      if (core && typeof core.setParameterValueById === 'function') core.setParameterValueById(id, v);
+    } catch (e) {}
+  }
+
+  // Simple lip-sync: drive ParamMouthOpenY every frame toward lipTarget.
+  app.ticker.add(() => {
+    if (!model) return;
+    setParam('ParamMouthOpenY', lipTarget);
+  });
+
+  async function load(modelId) {
+    const id = String(modelId || '').replace(/[^a-z0-9_]/gi, '').toLowerCase();
+    if (!id) { bridge('onError', 'empty model id'); return; }
+    const entry = MODEL_FILES[id];
+    if (!entry) { bridge('onError', 'unknown model ' + id); return; }
+    stopTalk();
+    if (model) { app.stage.removeChild(model); model.destroy(); model = null; }
+    try {
+      model = await PIXI.live2d.Live2DModel.from('models/' + id + '/' + entry, { autoInteract: true });
+      app.stage.addChild(model);
+      fit();
+      try { model.motion('Idle'); } catch (e) {}
+      bridge('onReady', id);
+    } catch (e) {
+      bridge('onError', String(e && e.message ? e.message : e));
+    }
+  }
+
+  function stopTalk() {
+    if (talkTimer) { clearInterval(talkTimer); talkTimer = null; }
+    lipTarget = 0;
+  }
+
+  // Text-driven talk animation: no audio yet, so approximate mouth motion
+  // from text length. Real audio lip-sync replaces this once TTS lands.
+  function speak(text) {
+    if (!model) return;
+    stopTalk();
+    const chars = Math.max(1, String(text || '').length);
+    const durationMs = Math.min(9000, 600 + chars * 110);
+    const start = Date.now();
+    try { model.motion('Tap'); } catch (e) {}
+    talkTimer = setInterval(() => {
+      const t = Date.now() - start;
+      if (t >= durationMs) { stopTalk(); return; }
+      lipTarget = 0.25 + 0.6 * Math.abs(Math.sin(t / 95)) * (0.6 + 0.4 * Math.random());
+    }, 40);
+  }
+
+  function idle() { stopTalk(); try { if (model) model.motion('Idle'); } catch (e) {} }
+  function setLipSync(v) { lipTarget = Math.max(0, Math.min(1, Number(v) || 0)); }
+
+  const MODEL_FILES = {
+    kei:    'kei_basic_free.model3.json',
+    izumi:  'izumi_illust.model3.json',
+    haru:   'haru_greeter_t05.model3.json',
+    hiyori: 'hiyori_pro_t11.model3.json',
+    tororo: 'tororo.model3.json',
+    hijiki: 'hijiki.model3.json'
+  };
+
+  window.anyiLive2d = { load, speak, idle, setLipSync };
+  bridge('onPageReady', '');
+})();
+</script>
+</body>
+</html>
