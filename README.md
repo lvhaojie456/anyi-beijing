@@ -14,8 +14,6 @@ docs/                      上线、合规和运维文档
 
 华为版本的打开、签名和发布说明见 [huawei-harmonyos/README.md](huawei-harmonyos/README.md)。
 
-面试讲法见 [小红书产品工程师面试项目讲法](docs/xhs-product-engineer-interview.md)。
-
 每次功能、代码、配置、数据库、文档或资源变更都记录在 [更新日志](CHANGELOG.md)；提交 Pull Request 前必须同步填写，删除内容也要明确写在“移除”小节。
 
 Android 已接入提示词/图片生成 Live2D 初版的异步工作流，制作端源码位于 `tools/live2d-worker/`，启用和部署见 [Live2D 生成接入](docs/live2d-generation.md)。生成服务默认关闭，需要部署后台和运行制作端。
@@ -85,18 +83,18 @@ npm run check
 npm run server:build
 ```
 
-腾讯云部署步骤见 [backend/TENCENT_DEPLOY.md](D:/Desktop/anyiapp2/backend/TENCENT_DEPLOY.md)。
+腾讯云部署步骤见 [backend/TENCENT_DEPLOY.md](backend/TENCENT_DEPLOY.md)。
 
 ## 上线材料
 
 - [更新日志](CHANGELOG.md)
 - [Codex 项目交接文档](docs/codex-handover.md)
-- [上线清单](D:/Desktop/anyiapp2/docs/launch-checklist.md)
-- [安全与运营](D:/Desktop/anyiapp2/docs/security-operations.md)
-- [Web 管理后台说明](D:/Desktop/anyiapp2/docs/admin-web-backend.md)
+- [上线清单](docs/launch-checklist.md)
+- [安全与运营](docs/security-operations.md)
+- [Web 管理后台说明](docs/admin-web-backend.md)
 - [AI 陪伴界面参考](docs/ai-companion-ui-references.md)
-- [隐私政策模板](D:/Desktop/anyiapp2/docs/privacy-policy-template.md)
-- [用户协议模板](D:/Desktop/anyiapp2/docs/user-agreement-template.md)
-- [AI 陪伴免责声明模板](D:/Desktop/anyiapp2/docs/ai-disclaimer-template.md)
+- [隐私政策模板](docs/privacy-policy-template.md)
+- [用户协议模板](docs/user-agreement-template.md)
+- [AI 陪伴免责声明模板](docs/ai-disclaimer-template.md)
 
 上线前仍需准备域名备案、HTTPS 证书、支付商户号、客服入口、隐私政策 URL、用户协议 URL、商店截图和测试账号。
