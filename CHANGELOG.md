@@ -23,6 +23,7 @@
 
 ### 新增
 
+- 新增 `docs/live2d-supervisor-plan.md`：Live2D 生成监督方案（规则恢复 + 大模型诊断与处置）。内容为三层架构、关卡与失败包、动作菜单与预算、前景遮罩与动作幅度回退等规则层能力、后端诊断字段与迁移 0014/0032 草案、App 文案与确认流程、隐私边界、测试验收与 PR 拆分。仅为方案文档，未改动任何代码。
 - 制作端新增规则恢复层 `tools/live2d-worker/scripts/foreground.py`：提示词生成默认请求透明背景（`IMAGE_BACKGROUND=transparent`，Apexin `gpt-image-2.5-sunburst` 实测 33 秒返回真 RGBA，供应商不支持时自动回落普通生成）；进拆层前 `neutralize_background` 把透明或近白（角落近白且与边框连通）背景填成中性灰 (210,210,210)，因为 See-through 会把纯白背景当作人物并入衣服图层，灰底则分得干净（同一张图灰底重拆实测 `topwear` 从占画布 79% 回到 10%）；拆层后 `clip_background` 按外接框占比 > 60%、逐层深度图饱和像素 > 30% 或遮罩外像素 > 30% 判定泄漏，只对泄漏图层按 `depth < 250 ∧ 遮罩` 重建并写出 `decomposition/input_clipped.psd`，其余图层逐字节不变；报告与遮罩写入 `foreground/`。
 - 制作端动作幅度回退：`motion_recipe(package, scale)` 支持整体缩小倾斜、呼吸、胸腔扩张、手臂与衣摆幅度；校验只因脚底位移 ≥ 0.25 px 或翻转三角形失败（顶点有限、无退化三角形）时按 1.0 → 0.66 → 0.33 重新绑定复检，最多两次，失败目录保留为 `body-motion.failed-scaleNNN`，`validation.json` 记录 `motionScale`。
 - 制作端新增监督层 `tools/live2d-worker/scripts/supervisor.py`：`LIVE2D_SUPERVISOR_MODE` = `off` / `shadow`（默认）/ `act`；用非流式 JSON 请求（≤ 512 px 缩略图、温度 0、60 秒超时、失败不重试不阻断）在规划后审查脸眼嘴矩形、拆层后审查图层表、新生成表情后审查闭眼张嘴、嘴部三档阈值都失败时定位嘴部矩形、校验通过后给初版打分（写入 `validation.visualReview`），最终失败时输出白名单诊断码、菜单动作与一句面向用户的中文。`act` 模式另执行免费动作：覆盖修正后的矩形、用更严格提示重做表情一次、把下次重试改为重新规划。每单预算跨尝试保存在任务目录 `supervisor-state.json`：模型调用 8、重规划 2、重绑定 2、重做表情 1、重生成图片 1；付费动作只变成建议。失败包只含阶段、异常类名、去掉路径的短消息与数值指标；全部审查记录留在任务目录 `supervisor/`。
