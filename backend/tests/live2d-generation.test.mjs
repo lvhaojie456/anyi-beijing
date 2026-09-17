@@ -119,6 +119,38 @@ test('Live2D queue ownership, idempotency, lease fencing, validation and binding
     raw.prepare("UPDATE live2d_jobs SET attempts = 3, lease_until = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(queued.data.job.id);
     assert.equal((await req('/internal/live2d/jobs/claim',{token:workerToken,method:'POST',body:{}})).data.job,null);
     assert.equal((await req(`/ai/live2d/jobs/${queued.data.job.id}`,{token:owner})).data.job.errorCode,'worker_unavailable');
+    // Worker diagnosis is whitelisted and shown to the owner; a retry hint is handed to exactly one claim.
+    const third=await submit(companion,owner,randomUUID(),'第三个人物');
+    assert.equal(third.status,202,JSON.stringify(third.data));
+    const c3=await req('/internal/live2d/jobs/claim',{token:workerToken,method:'POST',body:{}});
+    assert.equal(c3.data.job.id,third.data.job.id);
+    assert.equal(c3.data.job.retryHint,null);
+    assert.equal((await req(`/internal/live2d/jobs/${third.data.job.id}/fail`,{token:workerToken,lease:c3.data.job.leaseToken,method:'POST',body:{diagnosisCode:'nonsense'}})).status,400);
+    assert.equal((await req(`/internal/live2d/jobs/${third.data.job.id}/fail`,{token:workerToken,lease:c3.data.job.leaseToken,method:'POST',
+      body:{diagnosisCode:'background_leak',suggestion:'regenerate_image',summary:'背景被并入了人物图层\u0007'+'长'.repeat(300)}})).status,200);
+    let shown=(await req(`/ai/live2d/jobs/${third.data.job.id}`,{token:owner})).data.job;
+    assert.equal(shown.errorCode,'generation_failed');
+    assert.equal(shown.diagnosisCode,'background_leak');
+    assert.equal(shown.suggestion,'regenerate_image');
+    assert.ok(shown.summary.startsWith('背景被并入了人物图层'));
+    assert.ok(!shown.summary.includes('\u0007'));
+    assert.equal(shown.summary.length,200);
+    assert.equal((await req(`/ai/live2d/jobs/${third.data.job.id}/retry`,{token:owner,method:'POST',body:{hint:'bogus'}})).status,400);
+    const retried=await req(`/ai/live2d/jobs/${third.data.job.id}/retry`,{token:owner,method:'POST',body:{hint:'regenerate_image'}});
+    assert.equal(retried.status,200);
+    assert.equal(retried.data.job.diagnosisCode,null);
+    assert.equal(retried.data.job.summary,null);
+    const c4=await req('/internal/live2d/jobs/claim',{token:workerToken,method:'POST',body:{}});
+    assert.equal(c4.data.job.id,third.data.job.id);
+    assert.equal(c4.data.job.retryHint,'regenerate_image');
+    raw.prepare("UPDATE live2d_jobs SET lease_until = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(third.data.job.id);
+    const c5=await req('/internal/live2d/jobs/claim',{token:workerToken,method:'POST',body:{}});
+    assert.equal(c5.data.job.id,third.data.job.id);
+    assert.equal(c5.data.job.retryHint,null);
+    assert.equal((await req(`/internal/live2d/jobs/${third.data.job.id}/fail`,{token:workerToken,lease:c5.data.job.leaseToken,method:'POST',body:{}})).status,200);
+    shown=(await req(`/ai/live2d/jobs/${third.data.job.id}`,{token:owner})).data.job;
+    assert.equal(shown.status,'failed');
+    assert.equal(shown.diagnosisCode,null);
     const deletion=await req(`/ai/companions/${companion}`,{token:owner,method:'DELETE'});
     assert.equal(deletion.status,200,JSON.stringify(deletion.data));
     assert.equal((await req(`/ai/live2d/jobs/${id}`,{token:owner})).status,404);
