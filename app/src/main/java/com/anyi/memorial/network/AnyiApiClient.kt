@@ -248,7 +248,6 @@ class AnyiApiClient(
     fun listAiImageModels(): JSONArray {
         val response = request(method = "GET", path = "/ai/image-models", authorized = true)
         return response.optJSONArray("models")
-            ?: response.optJSONArray("imageModels")
             ?: JSONArray()
     }
 
@@ -624,18 +623,6 @@ class AnyiApiClient(
         ).getJSONObject("review")
     }
 
-    fun featureUnlocked(feature: String): Boolean {
-        return request(
-            method = "GET",
-            path = "/feature-unlocks/$feature",
-            authorized = true
-        ).optBoolean("unlocked", false)
-    }
-
-    fun unlockFeature(feature: String): JSONObject {
-        return request(method = "POST", path = "/feature-unlocks/$feature", authorized = true)
-    }
-
     private fun request(
         method: String,
         path: String,
@@ -782,7 +769,7 @@ class AnyiApiClient(
 
     private fun readTimeoutFor(path: String, method: String): Int {
         return when {
-            path == "/assets" || path.endsWith("/assets") || path.endsWith("/acceptance") -> 120_000
+            path == "/assets" || path.endsWith("/assets") -> 120_000
             path.endsWith("/messages") || path.endsWith("/voice-messages") || path.endsWith("/avatar") || path.endsWith("/avatar/studio") -> 120_000
             else -> 30_000
         }

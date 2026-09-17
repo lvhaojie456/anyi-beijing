@@ -21,9 +21,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image as ComposeImage
@@ -66,7 +63,6 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
-import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Cloud
@@ -116,15 +112,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -205,8 +198,6 @@ private const val KEY_LEGACY_AUTH_TOKEN = "session_token"
 private const val KEY_AUTH_TOKEN_ENCRYPTED = "session_token_encrypted"
 private const val SESSION_KEY_ALIAS = "anyi_session_key"
 private const val PENDING_CRASH_REPORT_FILE = "pending_crash_report.json"
-
-private const val DURIAN_OFFERING_FEATURE = "offering_durian"
 
 private const val CLOUD_CACHE_DIR = "anyi_cloud_resources"
 private const val CLOUD_CACHE_MAX_BYTES = 160L * 1024L * 1024L
@@ -1752,13 +1743,8 @@ private fun MemorialHallScreen(user: AppUser) {
     var candleUntilList by remember { mutableStateOf(emptyList<Long>()) }
     var incenseUntil by remember { mutableStateOf(0L) }
     var fruitOfferings by remember { mutableStateOf(emptyList<FruitOffering>()) }
-    var paidUnlocked by remember { mutableStateOf(false) }
-    var durianUnlocked by remember { mutableStateOf(false) }
-    var showPayment by remember { mutableStateOf(false) }
-    var showDurianPayment by remember { mutableStateOf(false) }
     var showFlowerPicker by remember { mutableStateOf(false) }
     var showBurnPicker by remember { mutableStateOf(false) }
-    var burnPaperAnimationKey by remember { mutableStateOf(0) }
     var showEditor by rememberSaveable { mutableStateOf(false) }
     var showHallMenu by rememberSaveable { mutableStateOf(false) }
     var cloudMessage by remember { mutableStateOf("") }
@@ -1786,18 +1772,13 @@ private fun MemorialHallScreen(user: AppUser) {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     val memorials = api.listMemorials()
-                    val unlock = api.featureUnlocked("hall_more")
-                    val durianUnlock = api.featureUnlocked(DURIAN_OFFERING_FEATURE)
-                    val first = if (memorials.length() > 0) memorials.getJSONObject(0) else null
-                    Triple(first, unlock, durianUnlock)
+                    if (memorials.length() > 0) memorials.getJSONObject(0) else null
                 }
             }
             loading = false
             result
-                .onSuccess { (memorial, unlocked, durianUnlock) ->
+                .onSuccess { memorial ->
                     if (memorial != null) applyMemorial(memorial)
-                    paidUnlocked = unlocked
-                    durianUnlocked = durianUnlock
                     cloudMessage = "已连接云端纪念馆"
                 }
                 .onFailure { cloudMessage = it.userFriendlyMessage("云端纪念馆加载失败") }
@@ -1825,7 +1806,7 @@ private fun MemorialHallScreen(user: AppUser) {
         }
     }
 
-    fun offerFruit(type: String, unlockDurian: Boolean = false) {
+    fun offerFruit(type: String) {
         val id = memorialId
         if (id == null) {
             cloudMessage = "请先保存纪念资料"
@@ -1835,7 +1816,6 @@ private fun MemorialHallScreen(user: AppUser) {
             loading = true
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    if (unlockDurian) api.unlockFeature(DURIAN_OFFERING_FEATURE)
                     api.offerFruit(id, type).getJSONArray("fruitOfferings")
                 }
             }
@@ -1843,8 +1823,7 @@ private fun MemorialHallScreen(user: AppUser) {
             result
                 .onSuccess {
                     fruitOfferings = parseMemorialFruits(it)
-                    if (type == "durian") durianUnlocked = true
-                    cloudMessage = if (type == "apple") "苹果已放到灵台" else "榴莲供品已放到灵台"
+                    cloudMessage = "苹果已放到灵台"
                 }
                 .onFailure { cloudMessage = it.userFriendlyMessage("供果失败") }
         }
@@ -1943,11 +1922,8 @@ private fun MemorialHallScreen(user: AppUser) {
     val nextIncenseMillis = (incenseUntil - now).coerceAtLeast(0L)
     val activeFruitOfferings = fruitOfferings.filter { it.until > now }
     val activeApples = activeFruitOfferings.filter { it.type == "apple" }.sortedBy { it.until }.take(3)
-    val activeDurians = activeFruitOfferings.filter { it.type == "durian" }.sortedBy { it.until }.take(1)
     val canOfferApple = activeApples.size < 3
-    val canOfferDurian = activeDurians.isEmpty()
     val nextAppleMillis = (activeApples.minOfOrNull { it.until - now } ?: 0L).coerceAtLeast(0L)
-    val nextDurianMillis = (activeDurians.minOfOrNull { it.until - now } ?: 0L).coerceAtLeast(0L)
     val visibleCloudMessage = cloudMessage.takeUnless { it == "已连接云端纪念馆" }.orEmpty()
 
     if (showEditor) {
@@ -2038,7 +2014,6 @@ private fun MemorialHallScreen(user: AppUser) {
                         now = now,
                         activeFlowers = activeFlowers,
                         fruitOfferings = activeFruitOfferings,
-                        burnPaperAnimationKey = burnPaperAnimationKey,
                         stageHeight = stageHeight
                     )
 
@@ -2106,35 +2081,6 @@ private fun MemorialHallScreen(user: AppUser) {
         }
     }
 
-    if (showPayment) {
-        AlertDialog(
-            onDismissRequest = { showPayment = false },
-            containerColor = Paper,
-            shape = RoundedCornerShape(8.dp),
-            icon = { Icon(Icons.Rounded.CardGiftcard, contentDescription = null, tint = Amber) },
-            title = { Text("解锁云端纪念馆") },
-            text = {
-                Text("付费功能暂未开放。正式支付接入并通过验收后才会启用解锁。")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        cloudMessage = "付费功能暂未开放"
-                        showPayment = false
-                    },
-                    colors = primaryButtonColors()
-                ) {
-                    Text("知道了")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPayment = false }) {
-                    Text("稍后")
-                }
-            }
-        )
-    }
-
     if (showHallMenu) {
         AlertDialog(
             onDismissRequest = { showHallMenu = false },
@@ -2187,32 +2133,6 @@ private fun MemorialHallScreen(user: AppUser) {
         )
     }
 
-    if (showDurianPayment) {
-        AlertDialog(
-            onDismissRequest = { showDurianPayment = false },
-            containerColor = Paper,
-            shape = RoundedCornerShape(8.dp),
-            icon = { Icon(Icons.Rounded.Redeem, contentDescription = null, tint = Amber) },
-            title = { Text("供奉榴莲") },
-            text = { Text("付费供品暂未开放。正式支付接入并通过验收后才会启用。") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        cloudMessage = "付费供品暂未开放"
-                        showDurianPayment = false
-                    },
-                    colors = primaryButtonColors()
-                ) {
-                    Text("知道了")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDurianPayment = false }) {
-                    Text("稍后")
-                }
-            }
-        )
-    }
 }
 
 @Composable
@@ -2459,7 +2379,6 @@ private fun MemorialStage(
     now: Long,
     activeFlowers: List<FlowerOffering>,
     fruitOfferings: List<FruitOffering>,
-    burnPaperAnimationKey: Int,
     stageHeight: Dp = 378.dp
 ) {
     Box(
@@ -2518,14 +2437,6 @@ private fun MemorialStage(
             CandleFlames(
                 activeCandles = activeCandles,
                 modifier = Modifier.matchParentSize()
-            )
-
-            PaperBurningAnimation(
-                animationKey = burnPaperAnimationKey,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(x = (-70).dp)
-                    .padding(top = maxHeight * 0.69f)
             )
 
             FruitOfferingsOnAltar(
@@ -2724,154 +2635,6 @@ private fun MemorialTablet(memorialName: String, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun PaperBurningAnimation(animationKey: Int, modifier: Modifier = Modifier) {
-    val progress = remember { Animatable(1f) }
-
-    LaunchedEffect(animationKey) {
-        if (animationKey > 0) {
-            progress.snapTo(0f)
-            progress.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = 2600, easing = FastOutSlowInEasing)
-            )
-        }
-    }
-
-    if (animationKey > 0 && progress.value < 0.998f) {
-        Canvas(
-            modifier = modifier
-                .width(78.dp)
-                .height(102.dp)
-        ) {
-            val burn = progress.value
-            val remaining = (1f - burn).coerceIn(0f, 1f)
-            val center = size.width * 0.5f
-            val ashAlpha = burn.coerceAtMost(0.82f)
-            val paperBottom = size.height * 0.82f
-            val paperTop = size.height * (0.32f + burn * 0.28f)
-            val paperHeight = (paperBottom - paperTop).coerceAtLeast(size.height * 0.04f)
-            val paperWidth = size.width * (0.62f - burn * 0.28f).coerceAtLeast(0.18f)
-            val charLine = paperTop + paperHeight * (0.15f + burn * 0.42f)
-
-            drawOval(
-                color = Color(0xFF4E3521).copy(alpha = 0.18f + ashAlpha * 0.18f),
-                topLeft = Offset(size.width * 0.18f, size.height * 0.84f),
-                size = Size(size.width * 0.64f, size.height * 0.08f)
-            )
-
-            listOf(-0.08f, 0.0f, 0.08f).forEachIndexed { index, shift ->
-                val localWidth = paperWidth * (1f - index * 0.07f)
-                val localTop = paperTop + size.height * index * 0.035f
-                val left = center - localWidth / 2f + size.width * shift
-                val paper = Path().apply {
-                    moveTo(left + localWidth * 0.08f, localTop)
-                    lineTo(left + localWidth * 0.92f, localTop + size.height * 0.02f)
-                    lineTo(left + localWidth * (0.82f - burn * 0.22f), localTop + paperHeight)
-                    lineTo(left + localWidth * (0.16f + burn * 0.12f), localTop + paperHeight * 0.96f)
-                    close()
-                }
-                drawPath(
-                    paper,
-                    brush = Brush.verticalGradient(
-                        listOf(
-                            Color(0xFFFFE8A3).copy(alpha = 0.94f * remaining),
-                            Color(0xFFE2B150).copy(alpha = 0.86f * remaining)
-                        )
-                    )
-                )
-                drawRoundRect(
-                    color = Color(0xFF7A4A20).copy(alpha = 0.34f * remaining),
-                    topLeft = Offset(left + localWidth * 0.31f, localTop + paperHeight * 0.22f),
-                    size = Size(localWidth * 0.38f, size.height * 0.018f),
-                    cornerRadius = CornerRadius(size.width * 0.01f, size.width * 0.01f)
-                )
-            }
-
-            val charredEdge = Path().apply {
-                moveTo(center - paperWidth * 0.34f, charLine)
-                cubicTo(
-                    center - paperWidth * 0.16f,
-                    charLine - size.height * 0.08f,
-                    center + paperWidth * 0.08f,
-                    charLine + size.height * 0.05f,
-                    center + paperWidth * 0.34f,
-                    charLine - size.height * 0.03f
-                )
-                lineTo(center + paperWidth * 0.38f, paperBottom)
-                lineTo(center - paperWidth * 0.38f, paperBottom)
-                close()
-            }
-            drawPath(charredEdge, color = Color(0xFF3B271B).copy(alpha = 0.34f + burn * 0.36f))
-
-            listOf(
-                Triple(center - size.width * 0.16f, size.width * 0.24f, 0.85f),
-                Triple(center, size.width * 0.32f, 1.08f),
-                Triple(center + size.width * 0.15f, size.width * 0.22f, 0.78f)
-            ).forEachIndexed { index, (flameCenter, flameWidth, flameScale) ->
-                val fireBase = paperBottom - size.height * (0.02f + index * 0.01f)
-                val flameHeight = size.height * (0.27f + (0.18f * remaining)) * flameScale
-                val flame = Path().apply {
-                    moveTo(flameCenter - flameWidth * 0.48f, fireBase)
-                    cubicTo(
-                        flameCenter - flameWidth * 0.42f,
-                        fireBase - flameHeight * 0.42f,
-                        flameCenter - flameWidth * 0.1f,
-                        fireBase - flameHeight * 0.72f,
-                        flameCenter,
-                        fireBase - flameHeight
-                    )
-                    cubicTo(
-                        flameCenter + flameWidth * 0.18f,
-                        fireBase - flameHeight * 0.7f,
-                        flameCenter + flameWidth * 0.46f,
-                        fireBase - flameHeight * 0.36f,
-                        flameCenter + flameWidth * 0.42f,
-                        fireBase
-                    )
-                    close()
-                }
-                drawPath(
-                    flame,
-                    brush = Brush.verticalGradient(
-                        listOf(
-                            Color(0xFFFFF5B8).copy(alpha = 0.92f),
-                            Color(0xFFFF9D39).copy(alpha = 0.9f),
-                            Color(0xFFD94D24).copy(alpha = 0.78f)
-                        )
-                    )
-                )
-            }
-
-            listOf(0.28f, 0.45f, 0.63f).forEachIndexed { index, xFraction ->
-                val rise = burn * size.height * (0.36f + index * 0.08f)
-                drawCircle(
-                    color = Color(0xFF5D4230).copy(alpha = 0.18f * remaining),
-                    radius = size.width * (0.022f + index * 0.004f),
-                    center = Offset(size.width * xFraction, size.height * 0.76f - rise)
-                )
-            }
-
-            val smoke = Path().apply {
-                moveTo(center + size.width * 0.04f, paperTop - size.height * 0.02f)
-                cubicTo(
-                    center - size.width * 0.24f,
-                    paperTop - size.height * (0.16f + burn * 0.08f),
-                    center + size.width * 0.24f,
-                    paperTop - size.height * (0.34f + burn * 0.12f),
-                    center - size.width * 0.05f,
-                    paperTop - size.height * (0.54f + burn * 0.16f)
-                )
-            }
-            drawPath(
-                smoke,
-                color = Color.White.copy(alpha = 0.3f * remaining),
-                style = androidx.compose.ui.graphics.drawscope.Stroke(width = size.width * 0.035f)
-            )
-        }
-    }
-}
-
-@Composable
 private fun FruitOfferingsOnAltar(fruitOfferings: List<FruitOffering>, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
@@ -2879,7 +2642,6 @@ private fun FruitOfferingsOnAltar(fruitOfferings: List<FruitOffering>, modifier:
             .height(82.dp)
     ) {
         val apples = fruitOfferings.filter { it.type == "apple" }.take(3)
-        val hasDurian = fruitOfferings.any { it.type == "durian" }
         if (apples.isNotEmpty()) {
             val appleCount = apples.size
             val applePlateWidth = if (appleCount == 2) 96.dp else 108.dp
@@ -2891,14 +2653,6 @@ private fun FruitOfferingsOnAltar(fruitOfferings: List<FruitOffering>, modifier:
                     .width(applePlateWidth)
                     .height(applePlateHeight)
                     .offset(y = 4.dp)
-            )
-        }
-        if (hasDurian) {
-            FruitIcon(
-                type = "durian",
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size(width = 42.dp, height = 38.dp)
             )
         }
     }
@@ -2944,18 +2698,6 @@ private fun appleOfferingImageRes(count: Int): Int = when (count.coerceIn(1, 3))
     1 -> R.drawable.anyi_hall_apple_real
     2 -> R.drawable.anyi_hall_apples_two_plate
     else -> R.drawable.anyi_hall_apples_real
-}
-
-@Composable
-private fun FruitIcon(type: String, modifier: Modifier = Modifier) {
-    ComposeImage(
-        painter = painterResource(
-            id = if (type == "durian") R.drawable.anyi_hall_durian_real else R.drawable.anyi_hall_apple_real
-        ),
-        contentDescription = null,
-        contentScale = ContentScale.Fit,
-        modifier = modifier
-    )
 }
 
 @Composable
@@ -6378,7 +6120,7 @@ private fun Context.loadCachedCloudResource(
     authorizationToken: String? = null,
     cacheIdentity: String = url
 ): File? {
-    if (!isCacheableCloudResource(url) && !isAuthenticatedAssetResource(url)) return null
+    if (!isAuthenticatedAssetResource(url)) return null
     val cacheDir = File(this.cacheDir, CLOUD_CACHE_DIR).apply { mkdirs() }
     val cacheFile = File(cacheDir, cloudCacheFileName(url, cacheIdentity))
     if (cacheFile.isFile && cacheFile.length() > 0L) {
@@ -6437,35 +6179,6 @@ private fun Context.pruneCloudResourceCache() {
             totalBytes -= size
         }
     }
-}
-
-private fun isCacheableCloudResource(url: String): Boolean {
-    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
-    val scheme = uri.scheme?.lowercase(Locale.US)
-    if (scheme != "https" && scheme != "http") return false
-    val apiHost = runCatching { Uri.parse(BuildConfig.API_BASE_URL).host }.getOrNull()
-    if (uri.host != apiHost && uri.host != "api.anyibj.cn") return false
-    val path = uri.path.orEmpty().lowercase(Locale.US)
-    val inStaticArea = path.startsWith("/assets/") ||
-        path.startsWith("/downloads/")
-    if (!inStaticArea || path.endsWith("/") || path.endsWith(".html") || path.endsWith(".htm")) {
-        return false
-    }
-    return listOf(
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".webp",
-        ".gif",
-        ".svg",
-        ".css",
-        ".js",
-        ".mjs",
-        ".json",
-        ".wav",
-        ".mp3",
-        ".ogg"
-    ).any { path.endsWith(it) }
 }
 
 private fun cloudCacheFileName(url: String, cacheIdentity: String = url): String {
@@ -6782,28 +6495,19 @@ private fun parseCommunityPosts(array: JSONArray?): List<CommunityPost> {
 }
 
 private fun parseCommunityPost(item: JSONObject): CommunityPost {
-    val authorName = item.optString(
-        "authorName",
-        item.optString("display_name", item.optString("username", "社区用户"))
-    ).ifBlank { "社区用户" }
-    val authorUsername = item.optString("authorUsername", item.optString("username", "user"))
-        .ifBlank { "user" }
-    val avatarUrl = item.optString("authorAvatarUrl", item.optString("avatar_url"))
-        .takeIf { it.isNotBlank() && it != "null" }
     return CommunityPost(
         id = item.optString("id"),
-        authorId = item.optString("authorId", item.optString("user_id")),
-        authorName = authorName,
-        authorUsername = authorUsername,
-        authorAvatarUrl = avatarUrl,
+        authorId = item.optString("authorId"),
+        authorName = item.optString("authorName").ifBlank { "社区用户" },
+        authorUsername = item.optString("authorUsername").ifBlank { "user" },
+        authorAvatarUrl = item.optNullableString("authorAvatarUrl"),
         content = item.optString("content"),
         imageUrls = parseStringArray(item.optJSONArray("imageUrls")),
-        likeCount = item.optInt("likeCount", item.optInt("like_count", 0)),
-        commentCount = item.optInt("commentCount", item.optInt("comment_count", 0)),
-        likedByMe = item.optBoolean("likedByMe", item.optInt("liked_by_me", 0) == 1),
-        createdAt = item.optLong("createdAt").takeIf { it > 0L }
-            ?: parseTimeMillis(item.optString("created_at")),
-        moderationStatus = item.optString("moderationStatus", item.optString("status", "approved"))
+        likeCount = item.optInt("likeCount", 0),
+        commentCount = item.optInt("commentCount", 0),
+        likedByMe = item.optBoolean("likedByMe", false),
+        createdAt = parseTimeMillis(item.optString("createdAt")),
+        moderationStatus = item.optString("moderationStatus", "approved")
     )
 }
 
@@ -6815,25 +6519,16 @@ private fun parseCommunityComments(array: JSONArray?): List<CommunityComment> {
 }
 
 private fun parseCommunityComment(item: JSONObject): CommunityComment {
-    val authorName = item.optString(
-        "authorName",
-        item.optString("display_name", item.optString("username", "社区用户"))
-    ).ifBlank { "社区用户" }
-    val authorUsername = item.optString("authorUsername", item.optString("username", "user"))
-        .ifBlank { "user" }
-    val avatarUrl = item.optString("authorAvatarUrl", item.optString("avatar_url"))
-        .takeIf { it.isNotBlank() && it != "null" }
     return CommunityComment(
         id = item.optString("id"),
-        postId = item.optString("postId", item.optString("post_id")),
-        authorId = item.optString("authorId", item.optString("user_id")),
-        authorName = authorName,
-        authorUsername = authorUsername,
-        authorAvatarUrl = avatarUrl,
+        postId = item.optString("postId"),
+        authorId = item.optString("authorId"),
+        authorName = item.optString("authorName").ifBlank { "社区用户" },
+        authorUsername = item.optString("authorUsername").ifBlank { "user" },
+        authorAvatarUrl = item.optNullableString("authorAvatarUrl"),
         content = item.optString("content"),
-        createdAt = item.optLong("createdAt").takeIf { it > 0L }
-            ?: parseTimeMillis(item.optString("created_at")),
-        moderationStatus = item.optString("moderationStatus", item.optString("status", "approved"))
+        createdAt = parseTimeMillis(item.optString("createdAt")),
+        moderationStatus = item.optString("moderationStatus", "approved")
     )
 }
 
@@ -6849,21 +6544,15 @@ private fun parseCommunityVolunteers(response: JSONObject): List<CommunityVolunt
 }
 
 private fun parseCommunityVolunteer(item: JSONObject): CommunityVolunteerPost {
-    val deadlineValue = item.optNullableString("deadlineAt")
-        ?: item.optNullableString("deadline_at")
     return CommunityVolunteerPost(
         id = item.optString("id", "volunteer-${item.optString("title").hashCode()}"),
         title = item.optString("title", "招募社区义工").ifBlank { "招募社区义工" },
         body = item.optString("body"),
-        contact = item.optString("contact")
-            .takeIf { it.isNotBlank() && it != "null" }
-            ?: "请在人文社区留言报名。",
-        imageUrl = item.optString("imageUrl", item.optString("image_url")).takeIf { it.isNotBlank() && it != "null" },
+        contact = item.optNullableString("contact") ?: "请在人文社区留言报名。",
+        imageUrl = item.optNullableString("imageUrl"),
         status = item.optString("status", "open").ifBlank { "open" },
-        deadlineAt = item.optLong("deadlineAt").takeIf { it > 0L }
-            ?: parseOptionalTimeMillis(deadlineValue),
-        createdAt = item.optLong("createdAt").takeIf { it > 0L }
-            ?: parseTimeMillis(item.optString("createdAt", item.optString("created_at")))
+        deadlineAt = parseOptionalTimeMillis(item.optNullableString("deadlineAt")),
+        createdAt = parseTimeMillis(item.optString("createdAt"))
     )
 }
 
@@ -6877,20 +6566,18 @@ private fun parseCommunityVolunteerApplications(array: JSONArray?): List<Communi
 private fun parseCommunityVolunteerApplication(item: JSONObject): CommunityVolunteerApplication {
     return CommunityVolunteerApplication(
         id = item.optString("id"),
-        volunteerPostId = item.optString("volunteerPostId", item.optString("volunteer_post_id")),
-        volunteerTitle = item.optString("volunteerTitle", item.optString("volunteer_title")),
-        applicantId = item.optString("applicantId", item.optString("user_id")),
-        applicantName = item.optString("applicantName", item.optString("display_name")),
-        applicantUsername = item.optString("applicantUsername", item.optString("username")),
+        volunteerPostId = item.optString("volunteerPostId"),
+        volunteerTitle = item.optString("volunteerTitle"),
+        applicantId = item.optString("applicantId"),
+        applicantName = item.optString("applicantName"),
+        applicantUsername = item.optString("applicantUsername"),
         applicantAvatarUrl = item.optNullableString("applicantAvatarUrl"),
         name = item.optString("name"),
         phone = item.optString("phone"),
         note = item.optString("note"),
         status = item.optString("status", "pending"),
-        createdAt = item.optLong("createdAt").takeIf { it > 0L }
-            ?: parseTimeMillis(item.optString("createdAt", item.optString("created_at"))),
-        updatedAt = item.optLong("updatedAt").takeIf { it > 0L }
-            ?: parseTimeMillis(item.optString("updatedAt", item.optString("updated_at")))
+        createdAt = parseTimeMillis(item.optString("createdAt")),
+        updatedAt = parseTimeMillis(item.optString("updatedAt"))
     )
 }
 
@@ -6962,11 +6649,8 @@ private fun Throwable.userFriendlyMessage(fallback: String): String {
         code.contains("admin_account_deletion_forbidden") -> "管理员账号不能在 App 内注销"
         code.contains("flower_limit_reached") -> "当前已有 2 个花篮，冷却结束后再献花"
         code.contains("candle_limit_reached") -> "当前已有 2 根蜡烛，任一根燃尽后可继续点蜡烛"
-        code.contains("durian_offering_requires_payment") -> "榴莲是付费供品，请先完成解锁"
         code.contains("apple_offering_limit_reached") -> "当前已有 3 个苹果，10 分钟后可继续放苹果"
-        code.contains("durian_offering_limit_reached") -> "当前已有 1 个榴莲，10 分钟后可继续放榴莲"
         code.contains("invalid_fruit_type") -> "暂不支持这种供品"
-        code.contains("payment_not_configured") -> "付费功能暂未开放，请勿重复支付"
         code.contains("unsupported_file_type") -> "暂不支持这种文件类型，请更换图片或音频"
         code.contains("file_size_invalid") -> "文件过大或为空，图片最多 20MB，音频最多 50MB"
         code.contains("file_required") -> "没有读取到文件，请重新选择"
@@ -7134,8 +6818,6 @@ private fun absoluteAssetUrl(value: String): String {
     val apiBase = BuildConfig.API_BASE_URL.trimEnd('/')
     return when {
         value.startsWith("/") -> "$apiBase$value"
-        value.startsWith("http://101.42.1.45/assets/") -> value.replace("http://101.42.1.45", apiBase)
-        value.startsWith("https://101.42.1.45/assets/") -> value.replace("https://101.42.1.45", apiBase)
         value.startsWith("http://api.anyibj.cn/assets/") -> value.replace("http://api.anyibj.cn", apiBase)
         value.startsWith("http://api.anyibj.cn/") -> value.replace("http://api.anyibj.cn", apiBase)
         else -> value

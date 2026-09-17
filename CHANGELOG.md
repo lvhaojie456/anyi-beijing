@@ -54,6 +54,7 @@
 - `docs/live2d-generation.md` 删除两处指向本机临时目录 `.tmp/live2d-smoke-VHORS5/`、`.tmp/live2d-smoke-X2LjAx/` 的定位说明。该目录是本地冒烟产物且已清理；验收结论本身保留在该文档与 `docs/releases/2026-09-17-live2d.md` 中。
 - `docs/security-operations.md` 的资产删除队列处理步骤改为通过管理后台页面按钮或 `curl` 直接调用 `POST /admin/asset-delete-queue/process`，不再依赖已删除的 PowerShell 脚本。
 - 根 `.gitignore` 与 `backend/.gitignore` 移除已无对应文件的 `.dev.vars`、`.wrangler/` 忽略规则。
+- 后端把 SQLite 与 MySQL 迁移运行器逐字重复的 `splitSqlStatements()` / `checksumSql()`（约 80 行）抽到新文件 `backend/server/migration-sql.ts`，`sqlite-db.ts` 与 `mysql-db.ts` 改为引用同一实现；迁移语句切分与校验和行为不变。
 
 ### 修复
 
@@ -72,6 +73,12 @@
 - 删除 `docs/xhs-product-engineer-interview.md`（131 行）及 `README.md` 中的“面试讲法”链接。该文件是个人面试准备材料，不属于产品文档；`.gitignore` 已将简历等个人文件排除在仓库外，此文件属漏入。
 - 删除 `backend/.dev.vars.example`。它是 Cloudflare Workers 时期的环境变量模板：仓库没有 `wrangler.toml`，后端代码与文档没有任何地方读取 `.dev.vars`；其 27 个键中 26 个已由 `backend/.env.server.example` 覆盖，唯一独有的 `ADMIN_USERNAMES` 后端并不读取。服务器环境变量模板统一为 `backend/.env.server.example`。
 - 删除 `backend/scripts/process-asset-delete-queue.ps1` 及 `backend/package.json` 中的 `asset:delete:process` 脚本。该脚本只能在 PowerShell 下运行，Mac / Ubuntu 环境均不可用；它调用的接口 `POST /admin/asset-delete-queue/process` 保留不变，管理后台页面已提供同一“处理资产删除队列”操作。
+- 删除华为 HarmonyOS 客户端整个目录 `huawei-harmonyos/`（36 个文件，约 3,700 行 ArkTS / JSON5 与 6 张图片）。该客户端没有 AI 陪伴页、未随近期功能迭代，用户于 2026-09-17 确认删除；需要时可从提交 `5be7ea1` 完整恢复。同步删除根 `README.md` 的华为小节与目录说明、`.editorconfig` 的 `ets` / `json5` 规则和 `.gitignore` 注释中的引用；`docs/codex-handover.md` 改为记录删除事实与恢复方式，`docs/live2d-generation.md` 去掉 HarmonyOS 说明。
+- 后端删除 `assetDeleteQueueKeyColumn()` 及其 `r2_key` 回落分支：所有能由仓库迁移文件重建的数据库（SQLite `0004` 建表、MySQL `0001` 建表）该列都叫 `asset_key`，生产 MySQL 亦然；此前每次入队或处理删除队列都要多做 1～2 次 `INFORMATION_SCHEMA` / `PRAGMA` 探测。`GET /admin/asset-delete-queue` 不再做 `asset_key` 别名映射，直接返回原始行。同时删除纯别名函数 `loadAiCompanion()`（3 处调用改为 `loadAiCompanionRow()`）和 `publicRequestOrigin()` 中已被前一行正则排除、不可达的空 host 分支。
+- Android 删除从未被触发的付费路径：`MemorialHallScreen` 的 `showPayment` / `showDurianPayment` 两个“付费功能暂未开放”对话框、`paidUnlocked` / `durianUnlocked` 状态、`offerFruit(unlockDurian)` 参数、榴莲供品渲染（`FruitIcon`、`hasDurian`、`activeDurians` 等）与 1.4 MB 图片 `drawable-nodpi/anyi_hall_durian_real.png`，以及 `AnyiApiClient.featureUnlocked()` / `unlockFeature()`。灵台每次刷新由 3 个请求减为 1 个（不再请求 `GET /feature-unlocks/hall_more` 与 `offering_durian`；后端接口本身保留）。`userFriendlyMessage` 去掉 3 条对应的榴莲 / 支付文案。
+- Android 删除 `PaperBurningAnimation`（约 145 行 Canvas 烧纸动画）及 `MemorialStage` 的 `burnPaperAnimationKey` 参数：该 key 从未递增，动画在任何路径下都不会渲染；连带移除 6 个仅供其使用的 import。
+- Android 删除与当前服务端不对应的兼容分支：`parseCommunityPost` / `Comment` / `Volunteer` / `Application` 的 snake_case 键回退（`display_name`、`user_id`、`created_at` 等，服务端只输出 camelCase）、`parseCompanionResponse` 对 `profile` / `imageUrl` / `asset` / `avatar` 等五种响应形状的猜测、`listAiImageModels` 的 `imageModels` 键、`AiImageModel.description`、`companionError` 的 `voice_too_long` 码、`readTimeoutFor` 的 `/acceptance` 路径、`absoluteAssetUrl` 对旧 IP `101.42.1.45` 的改写（迁移 `0021` 已在库内改为正式域名），以及 `isCacheableCloudResource()` 匿名磁盘缓存白名单（含退役数字人时代的 `.js` / `.css` / `.wav` 等扩展名）。图片磁盘缓存现在只对 API 域名 `/assets/` 下的鉴权资源生效，其它外链仍走内存缓存与直接请求，与此前实际行为一致。
+- 制作端 `tools/live2d-worker/scripts/auto_build.py` 删除 `make_recipe()` 中随后被 `measure_mouth()` 与 `preserve_texture` 整体覆盖的 `poly()` 多边形和肤色采样点计算，输出的 recipe 内容不变。
 
 ### 运维/部署
 
@@ -81,6 +88,7 @@
 - 本次不涉及环境变量或密钥变更。生产尚未部署，需先在本地完成 Android 构建与真机验收再发布。
 - 授权说明：6 个模型均受 Live2D《免费素材许可协议》v1.6 约束，"一般用户/小规模企业可用于任何营利或非营利目的"，Cubism Core 文件头标注为 Redistributable Code，当前个人使用合规。若未来年销售额达到 1000 万日元或以商业形式发行，需另行取得 Live2D 出版许可并复核形象授权，详见项目记忆 `anyi-live2d-licensing`。
 - 补充说明：本次仅删除鸿蒙端代码与资源。生产服务器上的 `open-llm-vtuber.service` 仍为 inactive/disabled 状态，nginx 对 `/vtuber`、`/live2d-models/`、`/tts-ws` 等的 404 拦截保持不变，本次未改动服务器。
+- 验证：本次清理后后端 `npm test` 50 项通过；Android `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest` 在本机 SDK（build-tools 36.1.0、JDK 21）通过，16 项单元测试全部通过；制作端 `unittest discover` 16 项通过。未构建 release 包，未部署。
 
 ## 当前发布（2026-09-08）
 

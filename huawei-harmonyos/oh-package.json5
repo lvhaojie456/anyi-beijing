@@ -1,8 +1,0 @@
-{
-  "modelVersion": "5.0.0",
-  "name": "anyi-harmonyos",
-  "version": "1.0.0",
-  "description": "安忆 HarmonyOS 原生客户端",
-  "dependencies": {},
-  "devDependencies": {}
-}

@@ -1095,7 +1095,6 @@ app.delete("/me", requireAuth, async (c) => {
     ["DELETE FROM users WHERE id = ?", [user.id]]
   ] as Array<[string, unknown[]]>;
 
-  const assetKeyColumn = await assetDeleteQueueKeyColumn(c);
   const auditStatement = c.env.DB.prepare(
     `INSERT INTO audit_logs (
       id, actor_id, actor_role, action, target_type, target_id,
@@ -1115,7 +1114,7 @@ app.delete("/me", requireAuth, async (c) => {
   );
   const assetQueueStatements = assetRows.results.map((row) =>
     c.env.DB.prepare(
-      `INSERT INTO asset_delete_queue (id, owner_id, ${assetKeyColumn}, reason, created_at) VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO asset_delete_queue (id, owner_id, asset_key, reason, created_at) VALUES (?, ?, ?, ?, ?)`
     ).bind(crypto.randomUUID(), user.id, row.asset_key, "account_deleted", new Date().toISOString())
   );
   const cleanupPrepared = cleanupStatements.map(([query, params]) =>
@@ -2083,7 +2082,7 @@ app.post("/ai/companions", requireAuth, async (c) => {
 });
 
 app.patch("/ai/companions/:id", requireAuth, async (c) => {
-  const companion = await loadAiCompanion(c, c.req.param("id"));
+  const companion = await loadAiCompanionRow(c, c.req.param("id"));
   const body = await parseJson(c);
   const updated = await updateAiCompanionFromBody(c, companion, body);
   return c.json({ companion: serializeAiCompanion(updated) });
@@ -2221,9 +2220,8 @@ app.delete("/ai/companions/:id", requireAuth, async (c) => {
     const companion = await loadAiCompanionRow(c, companionId);
     const live2dAssets = await c.env.DB.prepare("SELECT asset_key FROM assets WHERE owner_id = ? AND asset_key LIKE ?")
       .bind(userId,`${userId}/ai/live2d/${companion.id}/%`).all<{asset_key:string}>();
-    const live2dQueueColumn = await assetDeleteQueueKeyColumn(c);
     const live2dCleanup = live2dAssets.results.map(asset => c.env.DB.prepare(
-      `INSERT INTO asset_delete_queue (id,owner_id,${live2dQueueColumn},reason,created_at) VALUES (?,?,?,?,?)`
+      `INSERT INTO asset_delete_queue (id,owner_id,asset_key,reason,created_at) VALUES (?,?,?,?,?)`
     ).bind(crypto.randomUUID(),userId,asset.asset_key,"live2d_companion_deleted",new Date().toISOString()));
     const voiceRows = await c.env.DB.hasColumn("ai_chat_messages", "audio_url")
       ? await c.env.DB.prepare(
@@ -2302,13 +2300,13 @@ app.post("/ai/companions/:id/avatar/studio", requireAuth, async (c) => {
 });
 
 app.get("/ai/companions/:id/messages", requireAuth, async (c) => {
-  const companion = await loadAiCompanion(c, c.req.param("id"));
+  const companion = await loadAiCompanionRow(c, c.req.param("id"));
   const messages = await listAiMessages(c, companion.id);
   return c.json({ messages: messages.map(serializeAiMessage) });
 });
 
 app.post("/ai/companions/:id/messages", requireAuth, async (c) => {
-  const companion = await loadAiCompanion(c, c.req.param("id"));
+  const companion = await loadAiCompanionRow(c, c.req.param("id"));
   const user = c.get("user");
   const body = await parseJson(c);
   const content = readString(body, "content", { required: true, max: 500 });
@@ -3451,23 +3449,16 @@ app.get("/admin/crash-reports", requireAuth, async (c) => {
 
 app.get("/admin/asset-delete-queue", requireAuth, async (c) => {
   requireAdmin(c);
-  const keyColumn = await assetDeleteQueueKeyColumn(c);
   const rows = await c.env.DB.prepare(
     "SELECT * FROM asset_delete_queue ORDER BY created_at DESC LIMIT 200"
   ).all<Record<string, unknown>>();
-  return c.json({
-    items: rows.results.map((row) => ({
-      ...row,
-      asset_key: (row.asset_key || row[keyColumn]) as string | undefined
-    }))
-  });
+  return c.json({ items: rows.results });
 });
 
 app.post("/admin/asset-delete-queue/process", requireAuth, async (c) => {
   requireAdmin(c);
-  const keyColumn = await assetDeleteQueueKeyColumn(c);
   const rows = await c.env.DB.prepare(
-    `SELECT id, ${keyColumn} AS asset_key, reason
+    `SELECT id, asset_key, reason
      FROM asset_delete_queue
      WHERE status = 'pending'
      ORDER BY created_at ASC LIMIT 50`
@@ -3581,9 +3572,6 @@ function publicRequestOrigin(c: Context<AppEnv>) {
   const host = c.req.header("host") || requestUrl.host;
   const protocol = forwardedProto || requestUrl.protocol.replace(/:$/g, "");
   if (!/^[a-z0-9.-]+(?::\d{1,5})?$/i.test(host)) {
-    return requestUrl.origin;
-  }
-  if (!host) {
     return requestUrl.origin;
   }
   return `${protocol === "https" ? "https" : "http"}://${host}`;
@@ -4211,13 +4199,12 @@ async function safelyQueueReplacedBackground(
   if (!previousKey) return;
   try {
     if (await assetUrlStillReferenced(c, previousUrl)) return;
-    const keyColumn = await assetDeleteQueueKeyColumn(c);
     await c.env.DB.batch([
       c.env.DB.prepare(
         "UPDATE assets SET visibility = 'private' WHERE asset_key = ? AND owner_id = ?"
       ).bind(previousKey, ownerId),
       c.env.DB.prepare(
-        `INSERT INTO asset_delete_queue (id, owner_id, ${keyColumn}, reason, created_at)
+        `INSERT INTO asset_delete_queue (id, owner_id, asset_key, reason, created_at)
          VALUES (?, ?, ?, ?, ?)`
       ).bind(crypto.randomUUID(), ownerId, previousKey, reason, new Date().toISOString())
     ]);
@@ -4343,9 +4330,8 @@ async function queueAssetDelete(
   ownerId: string | null,
   reason: string
 ) {
-  const keyColumn = await assetDeleteQueueKeyColumn(c);
   await c.env.DB.prepare(
-    `INSERT INTO asset_delete_queue (id, owner_id, ${keyColumn}, reason, created_at) VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO asset_delete_queue (id, owner_id, asset_key, reason, created_at) VALUES (?, ?, ?, ?, ?)`
   )
     .bind(crypto.randomUUID(), ownerId, assetKey, reason, new Date().toISOString())
     .run();
@@ -4376,16 +4362,6 @@ async function assetDeletionAllowed(c: Context<AppEnv>, assetKey: string, reason
   if (asset.visibility === "public" || await assetUrlStillReferenced(c, asset.url)) return false;
   if (!reason.startsWith("upload_review_")) return true;
   return asset.review_status === "rejected" || asset.review_status === "quarantined";
-}
-
-async function assetDeleteQueueKeyColumn(c: Context<AppEnv>) {
-  if (await c.env.DB.hasColumn("asset_delete_queue", "asset_key")) {
-    return "asset_key";
-  }
-  if (await c.env.DB.hasColumn("asset_delete_queue", "r2_key")) {
-    return "r2_key";
-  }
-  return "asset_key";
 }
 
 async function parseJson(c: Context<AppEnv>): Promise<Record<string, unknown>> {
@@ -5244,10 +5220,6 @@ async function loadCommunityComment(c: Context<AppEnv>, commentId: string) {
     throw new ApiError(404, "community_comment_not_found");
   }
   return row;
-}
-
-async function loadAiCompanion(c: Context<AppEnv>, id: string) {
-  return loadAiCompanionRow(c, id);
 }
 
 async function loadAiCompanionRow(c: Context<AppEnv>, id: string) {

@@ -1,18 +1,15 @@
 # 安忆
 
-安忆包含 Android、华为 HarmonyOS、云端 API 和官网四个独立部分。当前 Android 版本已实现云端纪念馆、人文社区、义工招募、素材上传审核、合规页面，以及按陪伴对象组织的 AI 消息、记忆和头像管理。陪伴对象可以是人物、宠物、地点、物品或其他有意义的存在。远程礼祭、祈愿护符商城和支付能力已预留数据模型与上线规划，尚未完成完整接口闭环。
+安忆包含 Android、云端 API 和官网三个独立部分。当前 Android 版本已实现云端纪念馆、人文社区、义工招募、素材上传审核、合规页面，以及按陪伴对象组织的 AI 消息、记忆和头像管理。陪伴对象可以是人物、宠物、地点、物品或其他有意义的存在。远程礼祭、祈愿护符商城和支付能力已预留数据模型与上线规划，尚未完成完整接口闭环。
 
 ## 工程目录
 
 ```text
 app/                       Android Compose 客户端
-huawei-harmonyos/          华为 HarmonyOS 原生客户端，可独立用 DevEco Studio 打开
 backend/                   Node.js + Hono 云端 API
 website/                   官网静态文件
 docs/                      上线、合规和运维文档
 ```
-
-华为版本的打开、签名和发布说明见 [huawei-harmonyos/README.md](huawei-harmonyos/README.md)。
 
 每次功能、代码、配置、数据库、文档或资源变更都记录在 [更新日志](CHANGELOG.md)；提交 Pull Request 前必须同步填写，删除内容也要明确写在“移除”小节。
 
@@ -63,16 +60,6 @@ Release AAB 通常输出到：
 ```text
 D:\Desktop\anyiapp2\app\build\outputs\bundle\release\app-release.aab
 ```
-
-## 华为 HarmonyOS
-
-华为版本已经整理为独立 Stage 模型工程：
-
-```text
-huawei-harmonyos/
-```
-
-在 DevEco Studio 中直接打开该目录，不需要从 Android 工程导入。它使用 ArkTS、ArkUI 和 HarmonyOS 系统 Kit，共用同一套腾讯云 API 和用户数据。
 
 ## 后端
 
