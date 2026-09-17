@@ -106,7 +106,7 @@ TENCENT_ASR_ENDPOINT=https://asr.tencentcloudapi.com
 
 ## 腾讯云部署
 
-完整步骤见 [TENCENT_DEPLOY.md](D:/Desktop/anyiapp2/backend/TENCENT_DEPLOY.md)。
+完整步骤见 [TENCENT_DEPLOY.md](TENCENT_DEPLOY.md)。
 
 核心路径：
 
@@ -126,14 +126,14 @@ npm run server:build
 npm run server:start
 ```
 
-systemd 服务文件在 [examples/anyi-memorial-api.service](D:/Desktop/anyiapp2/backend/examples/anyi-memorial-api.service)。
+systemd 服务文件在 [examples/anyi-memorial-api.service](examples/anyi-memorial-api.service)。
 
 该单元启用 `TRUST_PROXY=true`；必须配套部署仓库内的 Nginx 配置，使 Nginx 重建 `X-Real-IP` 和 `X-Forwarded-For` 并清除外部 `CF-Connecting-IP`，否则客户端可伪造来源 IP。
 
 Nginx 配置在：
 
-- [examples/tencent-nginx-node-api-http.conf](D:/Desktop/anyiapp2/backend/examples/tencent-nginx-node-api-http.conf)
-- [examples/tencent-nginx-node-api.conf](D:/Desktop/anyiapp2/backend/examples/tencent-nginx-node-api.conf)
+- [examples/tencent-nginx-node-api-http.conf](examples/tencent-nginx-node-api-http.conf)
+- [examples/tencent-nginx-node-api.conf](examples/tencent-nginx-node-api.conf)
 
 ## 数据备份
 

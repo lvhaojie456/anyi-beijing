@@ -50,6 +50,10 @@
 - 根目录 README 增加 Codex 项目交接文档入口。
 - `AiCompanion` 数据类新增 `live2dModel: String?`；`AiCompanionRow` 与 `serializeAiCompanion` 同步新增 `live2d_model` / `live2dModel`。
 - 聊天页"更多"菜单新增"选择动态形象"（未绑定时）/ "沉浸模式" + "更换动态形象"（已绑定时）两项。
+- 根目录 `README.md` 与 `backend/README.md` 中 9 处指向 `D:/Desktop/anyiapp2/...` 的 Windows 绝对路径链接改为仓库相对路径（腾讯云部署文档、上线清单、安全与运营、后台说明、三个法务模板、两个 Nginx 配置示例）。此前这些链接在原开发机以外的任何环境都无法打开。
+- `docs/live2d-generation.md` 删除两处指向本机临时目录 `.tmp/live2d-smoke-VHORS5/`、`.tmp/live2d-smoke-X2LjAx/` 的定位说明。该目录是本地冒烟产物且已清理；验收结论本身保留在该文档与 `docs/releases/2026-09-17-live2d.md` 中。
+- `docs/security-operations.md` 的资产删除队列处理步骤改为通过管理后台页面按钮或 `curl` 直接调用 `POST /admin/asset-delete-queue/process`，不再依赖已删除的 PowerShell 脚本。
+- 根 `.gitignore` 与 `backend/.gitignore` 移除已无对应文件的 `.dev.vars`、`.wrangler/` 忽略规则。
 
 ### 修复
 
@@ -65,6 +69,9 @@
 - 移除鸿蒙端随上述页面一并失效的内容：`ApiClient.ets` 的 5 个 digital-human 方法和 `DigitalHumanPayload` 接口、`Constants.ets` 的 `DEFAULT_DIGITAL_HUMAN_URL`、`Models.ets` 的 7 个死类型（`DigitalHumanMessage`、`DigitalHumanMessagesResponse`、`DigitalHumanChatResponse`、`DigitalHumanConfig`、`AiMemory`、`AiMemoriesResponse`、`AiMemorySettingsResponse`），以及三张不再被引用的图片 `anyi_digital_grandma.png`（1.2 MB）、`anyi_digital_grandpa.png`（1.1 MB）、`anyi_ai_page_bg.png`（319 KB）。
 - 修正 `AppConfigResponse` 类型：原先只声明 `digitalHuman` 字段，与后端实际返回的 `wechat`/`payments`/`ai` 结构不符，已按生产响应重建为 `WechatConfig`/`PaymentsConfig`/`AiConfig`。
 - 更新 `huawei-harmonyos/README.md`：删除 "ArkWeb：现有 2D 数字人页面" 与功能表里的 AI 陪伴行，并说明该页被移除的原因。
+- 删除 `docs/xhs-product-engineer-interview.md`（131 行）及 `README.md` 中的“面试讲法”链接。该文件是个人面试准备材料，不属于产品文档；`.gitignore` 已将简历等个人文件排除在仓库外，此文件属漏入。
+- 删除 `backend/.dev.vars.example`。它是 Cloudflare Workers 时期的环境变量模板：仓库没有 `wrangler.toml`，后端代码与文档没有任何地方读取 `.dev.vars`；其 27 个键中 26 个已由 `backend/.env.server.example` 覆盖，唯一独有的 `ADMIN_USERNAMES` 后端并不读取。服务器环境变量模板统一为 `backend/.env.server.example`。
+- 删除 `backend/scripts/process-asset-delete-queue.ps1` 及 `backend/package.json` 中的 `asset:delete:process` 脚本。该脚本只能在 PowerShell 下运行，Mac / Ubuntu 环境均不可用；它调用的接口 `POST /admin/asset-delete-queue/process` 保留不变，管理后台页面已提供同一“处理资产删除队列”操作。
 
 ### 运维/部署
 

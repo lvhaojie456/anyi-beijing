@@ -32,21 +32,20 @@ sudo systemctl start anyi-mysql-backup.service
 
 ## 处理文件删除队列
 
-先用管理员账号登录后台，取得当前 Bearer token，设置环境变量：
+用于处理账号注销、上传审核拒绝或隔离产生的本地文件删除任务。有两种方式：
 
-```powershell
-$env:ANYI_ADMIN_TOKEN='your-admin-token'
-cd D:\Desktop\anyiapp2\backend
-npm run asset:delete:process
+1. 管理后台页面：用管理员账号登录后台，在资产删除队列区域点击“处理待删除”按钮。
+2. 命令行：用管理员账号登录取得当前 Bearer token，直接调用接口：
+
+```bash
+export ANYI_ADMIN_TOKEN='your-admin-token'
+curl -fsS -X POST \
+  -H "Authorization: Bearer $ANYI_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" -d '{}' \
+  https://api.anyibj.cn/admin/asset-delete-queue/process
 ```
 
-这会调用：
-
-```text
-POST /admin/asset-delete-queue/process
-```
-
-用于处理账号注销、上传审核拒绝或隔离产生的本地文件删除任务。
+接口为 `POST /admin/asset-delete-queue/process`，返回本次尝试处理（`attempted`）与实际删除（`deleted`）的条数。
 
 ## 上线前建议
 
