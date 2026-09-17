@@ -32,17 +32,45 @@ Mac 制作端（tools/live2d-worker）
 | GET /ai/companions/:id/live2d/jobs | 对象最近 20 项任务 |
 | GET /ai/live2d/jobs/:id | 单项状态和进度 |
 | POST /ai/live2d/jobs/:id/cancel | 取消未完成任务 |
-| POST /ai/live2d/jobs/:id/retry | 重试失败或取消任务 |
+| POST /ai/live2d/jobs/:id/retry | 重试失败或取消任务；可带 `{"hint":"regenerate_image"}`，制作端据此放弃旧图片重新生成 |
 | POST /ai/live2d/jobs/:id/activate | 绑定成功产物 |
 | GET /ai/live2d/jobs/:id/files/* | 本人读取运行资产、预览或 project.zip |
-| POST /internal/live2d/jobs/claim | 制作端领取任务 |
+| POST /internal/live2d/jobs/claim | 制作端领取任务；响应含 `retryHint`，只在第一次领取时下发 |
 | POST /internal/live2d/jobs/:id/heartbeat | 续约及进度 |
 | GET /internal/live2d/jobs/:id/input | 领取者下载源图 |
 | POST /internal/live2d/jobs/:id/artifacts?name=… | 单文件 multipart，带 X-Content-SHA256 |
 | POST /internal/live2d/jobs/:id/complete | 校验齐全后发布 |
-| POST /internal/live2d/jobs/:id/fail | 标记失败，不暴露供应商响应 |
+| POST /internal/live2d/jobs/:id/fail | 标记失败，不暴露供应商响应；可带白名单 `diagnosisCode`、`suggestion` 与 ≤ 200 字 `summary`，任务响应原样透给本人 |
 
 内部接口必须携带 `Authorization: Bearer <LIVE2D_WORKER_TOKEN>`；领取后的操作还需 `X-Live2d-Lease`。租约 120 秒、15 秒续约、最多 3 次自动领取。前端显示真实阶段进度而非预计完成时间。每用户每日新建最多 10 项任务，源图最多 8 MB，单个运行资产最多 32 MB、精修 ZIP 最多 240 MB，总产物最多 350 MB。
+
+## 规则恢复与监督
+
+2026-09-18 起制作端按 `docs/live2d-supervisor-plan.md` 的三层结构处理失败。
+
+规则层始终生效、不调用模型：
+
+- 提示词生成默认请求透明背景（`IMAGE_BACKGROUND=transparent`，供应商不支持时回落普通生成）。进拆层前 `foreground.neutralize_background` 把透明或近白（角落近白且与边框连通）背景填成中性灰 (210,210,210)：See-through 会把纯白背景当作人物并入衣服图层，灰底则分得干净。
+- 拆层后 `foreground.clip_background` 检查每个图层：外接框超过画布 60%，或按逐层深度图 `input/<part>_depth.png` 饱和（≥ 250）像素超过 30%，或落在前景遮罩外的像素超过 30%，判定背景泄漏。只对泄漏图层重建：保留 深度 < 250 且在遮罩内 的像素，形态学开运算、保留 ≥ 最大连通域 2% 的区块并填洞，写出 `decomposition/input_clipped.psd`，其余图层逐字节不变。
+- 校验只因脚底位移 ≥ 0.25 px 或翻转三角形未通过（顶点有限、无退化三角形）时，按 `MOTION_SCALES = (1.0, 0.66, 0.33)` 缩小倾斜、呼吸、手臂、衣摆幅度重新绑定并复检，最多两次；`validation.json` 记录 `motionScale`。
+- Astra 流中断按 `ASTRA_STREAM_RETRIES` 重试；嘴部暗区阈值 145/120/100 回退。
+
+监督层（`LIVE2D_SUPERVISOR_MODE`：`off` / `shadow`（默认）/ `act`）用非流式 JSON 请求调用 `SUPERVISOR_MODEL`（默认同 `ASTRA_MODEL`），每次带 ≤ 512 px 缩略图，温度 0，超时 60 秒，失败不重试、不阻断：
+
+| 时机 | 材料 | 回答 | shadow | act |
+| --- | --- | --- | --- | --- |
+| 规划后 | 输入图 + 脸/眼/嘴矩形 | 是否落对，修正矩形 | 记录 | 用修正矩形覆盖 `layer_plan.json` |
+| 拆层后 | 图层缩略表 + 规则层报告 | 是否泄漏、错分、缺失 | 记录 | 记录（裁剪由规则层决定） |
+| 表情后（仅新生成时） | 原脸 / 闭眼 / 张嘴 | 是否闭眼、张嘴、保持身份 | 记录 | 不合格则用更严格提示重做一次 |
+| 嘴部三档阈值都失败 | 张嘴编辑图 | 嘴的矩形 | 用该矩形重测 | 同 |
+| 校验通过后 | 表情表 + 姿态表 | 0–1 评分与问题 | 写入 `validation.visualReview`，不阻断 | 同 |
+| 最终失败 | 失败包 + 缩略图 | 诊断码、菜单动作、一句中文 | 只用于诊断码与摘要 | 另执行 `replan_with_hint`（删除本次规划检查点，下次重试重新分析） |
+
+每单预算（跨尝试，存于任务目录 `supervisor-state.json`）：模型调用 8 次、重规划 2 次、重绑定 2 次、重做表情 1 次、重生成图片 1 次。付费动作不会自动执行，只作为 `suggestion=regenerate_image` 透给 App，用户点"换背景重新生成"后以 `hint` 重试，制作端在领取时收到 `retryHint` 并放弃旧图片的全部检查点。
+
+诊断码白名单：`provider_unavailable`、`background_leak`、`face_not_located`、`expression_failed`、`rig_unstable`、`budget_exhausted`；建议白名单：`retry`、`regenerate_image`、`new_input`。失败包只含阶段、异常类名、去掉路径的短消息和数值指标；审查记录留在任务目录 `supervisor/`，不上传。
+
+回放验证：线上任务 `5462ebc4` 第二次尝试的产物在新流程下自动判定 `topwear` 泄漏并裁剪（1,014,498 → 146,729 像素，外接框 488,166–794,711，与同图灰底重新拆层的结果一致），校验一次通过，脚底位移 0.0002 px。
 
 ## 部署
 

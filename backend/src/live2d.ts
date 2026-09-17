@@ -11,9 +11,29 @@ type Job = {
   prompt: string; source_key: string | null; status: string; stage: string; progress: number;
   error_code: string | null; lease_token: string | null; lease_until: string | null;
   attempts: number; created_at: string; updated_at: string;
+  diagnosis_code: string | null; suggestion: string | null; retry_hint: string | null; supervisor_summary: string | null;
 };
 type Artifact = { name: string; asset_key: string; sha256: string; size_bytes: number; mime_type: string };
 const stages = new Set(["queued", "preparing", "generating", "planning", "decomposing", "expressions", "refining", "rigging", "verifying", "uploading"]);
+// Worker-reported diagnosis. Codes map to fixed client copy; the summary is a short worker-written sentence.
+const diagnosisCodes = new Set(["provider_unavailable", "background_leak", "face_not_located", "expression_failed", "rig_unstable", "budget_exhausted"]);
+const suggestions = new Set(["retry", "regenerate_image", "new_input"]);
+const retryHints = new Set(["regenerate_image"]);
+const SUMMARY_LIMIT = 200;
+
+function summaryText(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new Live2dError(400, "live2d_invalid_diagnosis");
+  // eslint-disable-next-line no-control-regex
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  return cleaned ? cleaned.slice(0, SUMMARY_LIMIT) : null;
+}
+
+function whitelisted(value: unknown, allowed: Set<string>): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !allowed.has(value)) throw new Live2dError(400, "live2d_invalid_diagnosis");
+  return value;
+}
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const now = () => new Date().toISOString();
 const expires = () => new Date(Date.now() + 120_000).toISOString();
@@ -99,6 +119,7 @@ function serialize(row: Job) {
     id: row.id, companionId: row.companion_id, status: row.status, stage: row.stage,
     progress: row.progress, errorCode: row.error_code, createdAt: row.created_at, updatedAt: row.updated_at,
     refinementRequired: true, editorCompatibility: "unverified",
+    diagnosisCode: row.diagnosis_code ?? null, suggestion: row.suggestion ?? null, summary: row.supervisor_summary ?? null,
     modelId: row.status === "succeeded" ? `generated:${row.id}` : null,
     previewPath: row.status === "succeeded" ? `/ai/live2d/jobs/${row.id}/files/preview.png` : null,
     projectPath: row.status === "succeeded" ? `/ai/live2d/jobs/${row.id}/files/project.zip` : null
@@ -219,11 +240,13 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
     if (!live2dEnabled(c)) throw new Live2dError(503,"live2d_not_configured");
     const row=await job(c,c.req.param("id"));
     if (!['failed','cancelled'].includes(row.status)) throw new Live2dError(409,"live2d_not_retryable");
+    const body=await c.req.json().catch(()=>({})) as Record<string,unknown>;
+    const hint=whitelisted(body?.hint,retryHints);
     const active=await c.env.DB.prepare("SELECT id FROM live2d_jobs WHERE active_key = ?").bind(row.companion_id).first();
     if (active) throw new Live2dError(409,"live2d_job_already_active");
     try {
-      await c.env.DB.prepare("UPDATE live2d_jobs SET status = 'queued', stage = 'queued', progress = 0, error_code = NULL, lease_token = NULL, lease_until = NULL, attempts = 0, active_key = ?, updated_at = ? WHERE id = ? AND status IN ('failed','cancelled')")
-        .bind(row.companion_id,now(),row.id).run();
+      await c.env.DB.prepare("UPDATE live2d_jobs SET status = 'queued', stage = 'queued', progress = 0, error_code = NULL, diagnosis_code = NULL, suggestion = NULL, supervisor_summary = NULL, retry_hint = ?, lease_token = NULL, lease_until = NULL, attempts = 0, active_key = ?, updated_at = ? WHERE id = ? AND status IN ('failed','cancelled')")
+        .bind(hint,row.companion_id,now(),row.id).run();
     } catch { throw new Live2dError(409,"live2d_job_already_active"); }
     return c.json({job:serialize(await job(c,row.id))});
   });
@@ -258,8 +281,12 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
       const lease=randomUUID();
       const result=await c.env.DB.prepare("UPDATE live2d_jobs SET status = 'running', stage = 'preparing', progress = 1, lease_token = ?, lease_until = ?, attempts = attempts + 1, updated_at = ? WHERE id = ? AND (status = 'queued' OR (status = 'running' AND lease_until < ? AND attempts < 3))")
         .bind(lease,expires(),now(),row.id,now()).run();
-      if (Number(result.meta.changes)>0) return c.json({job:{id:row.id,prompt:row.prompt,leaseToken:lease,
-        inputPath:row.source_key ? `/internal/live2d/jobs/${row.id}/input` : null}});
+      if (Number(result.meta.changes)>0) {
+        // The hint is consumed by the first claim so a re-claim after a lost lease does not repeat a paid action.
+        if (row.retry_hint) await c.env.DB.prepare("UPDATE live2d_jobs SET retry_hint = NULL WHERE id = ? AND lease_token = ?").bind(row.id,lease).run();
+        return c.json({job:{id:row.id,prompt:row.prompt,leaseToken:lease,retryHint:row.retry_hint ?? null,
+          inputPath:row.source_key ? `/internal/live2d/jobs/${row.id}/input` : null}});
+      }
     }
     return c.json({job:null});
   });
@@ -330,7 +357,7 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
     validateRuntime(await document('runtime/model.model3.json'),names);
     const validation=await document('validation.json');
     if (validation.corePassed!==true || validation.motionPassed!==true || validation.psdPassed!==true) throw new Live2dError(422,'live2d_validation_failed');
-    const result=await c.env.DB.prepare("UPDATE live2d_jobs SET status = 'succeeded', stage = 'completed', progress = 100, active_key = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND lease_token = ? AND status = 'running'")
+    const result=await c.env.DB.prepare("UPDATE live2d_jobs SET status = 'succeeded', stage = 'completed', progress = 100, active_key = NULL, lease_until = NULL, diagnosis_code = NULL, suggestion = NULL, supervisor_summary = NULL, updated_at = ? WHERE id = ? AND lease_token = ? AND status = 'running'")
       .bind(now(),row.id,row.lease_token).run();
     if (!Number(result.meta.changes)) throw new Live2dError(409,'live2d_lease_lost');
     return c.json({ok:true});
@@ -338,8 +365,13 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
   app.post("/internal/live2d/jobs/:id/fail",worker,async c => {
     const row=await leased(c);
     // Keep provider responses, prompts, credentials and local paths out of the client error.
-    await c.env.DB.prepare("UPDATE live2d_jobs SET status = 'failed', stage = 'failed', error_code = 'generation_failed', active_key = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND lease_token = ? AND status = 'running'")
-      .bind(now(),row.id,row.lease_token).run();
+    // The worker may add a whitelisted diagnosis code, a suggestion and a short user-facing sentence.
+    const body=await c.req.json().catch(()=>({})) as Record<string,unknown>;
+    const code=whitelisted(body?.diagnosisCode,diagnosisCodes);
+    const suggestion=code ? whitelisted(body?.suggestion,suggestions) : null;
+    const summary=code ? summaryText(body?.summary) : null;
+    await c.env.DB.prepare("UPDATE live2d_jobs SET status = 'failed', stage = 'failed', error_code = 'generation_failed', diagnosis_code = ?, suggestion = ?, supervisor_summary = ?, active_key = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND lease_token = ? AND status = 'running'")
+      .bind(code,suggestion,summary,now(),row.id,row.lease_token).run();
     return c.json({ok:true});
   });
 }

@@ -31,6 +31,28 @@ class Live2dJobRequestTest {
     }
 
     @Test
+    fun retryWithHintSendsWhitelistedJsonBodyOnly() {
+        val id="0533712f-e198-4867-abcd-664a0f65fac6"
+        val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)
+        val bodies=mutableListOf<String>()
+        server.createContext("/ai/live2d/jobs/$id/retry") { exchange ->
+            bodies.add(exchange.requestBody.readBytes().toString(Charsets.UTF_8))
+            val result="""{"job":{"id":"$id","status":"queued","stage":"queued"}}""".toByteArray()
+            exchange.sendResponseHeaders(200,result.size.toLong())
+            exchange.responseBody.use { it.write(result) };exchange.close()
+        }
+        server.start()
+        try {
+            val api=AnyiApiClient("http://127.0.0.1:${server.address.port}") { "test-token" }
+            assertEquals("queued",api.live2dJobAction(id,"retry","regenerate_image").getJSONObject("job").getString("status"))
+            api.live2dJobAction(id,"retry")
+            assertEquals(listOf("""{"hint":"regenerate_image"}""","{}"),bodies)
+            assertThrows(IllegalArgumentException::class.java) { api.live2dJobAction(id,"retry","clip_background") }
+            assertThrows(IllegalArgumentException::class.java) { api.live2dJobAction(id,"cancel","regenerate_image") }
+        } finally { server.stop(0) }
+    }
+
+    @Test
     fun privateFilesRejectTraversalAndDoNotForwardCredentialsOnRedirect() {
         val id="0533712f-e198-4867-abcd-664a0f65fac6"
         val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)

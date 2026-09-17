@@ -24,10 +24,19 @@
 ### 新增
 
 - 新增 `docs/live2d-supervisor-plan.md`：Live2D 生成监督方案（规则恢复 + 大模型诊断与处置）。内容为三层架构、关卡与失败包、动作菜单与预算、前景遮罩与动作幅度回退等规则层能力、后端诊断字段与迁移 0014/0032 草案、App 文案与确认流程、隐私边界、测试验收与 PR 拆分。仅为方案文档，未改动任何代码。
+- 制作端新增规则恢复层 `tools/live2d-worker/scripts/foreground.py`：提示词生成默认请求透明背景（`IMAGE_BACKGROUND=transparent`，Apexin `gpt-image-2.5-sunburst` 实测 33 秒返回真 RGBA，供应商不支持时自动回落普通生成）；进拆层前 `neutralize_background` 把透明或近白（角落近白且与边框连通）背景填成中性灰 (210,210,210)，因为 See-through 会把纯白背景当作人物并入衣服图层，灰底则分得干净（同一张图灰底重拆实测 `topwear` 从占画布 79% 回到 10%）；拆层后 `clip_background` 按外接框占比 > 60%、逐层深度图饱和像素 > 30% 或遮罩外像素 > 30% 判定泄漏，只对泄漏图层按 `depth < 250 ∧ 遮罩` 重建并写出 `decomposition/input_clipped.psd`，其余图层逐字节不变；报告与遮罩写入 `foreground/`。
+- 制作端动作幅度回退：`motion_recipe(package, scale)` 支持整体缩小倾斜、呼吸、胸腔扩张、手臂与衣摆幅度；校验只因脚底位移 ≥ 0.25 px 或翻转三角形失败（顶点有限、无退化三角形）时按 1.0 → 0.66 → 0.33 重新绑定复检，最多两次，失败目录保留为 `body-motion.failed-scaleNNN`，`validation.json` 记录 `motionScale`。
+- 制作端新增监督层 `tools/live2d-worker/scripts/supervisor.py`：`LIVE2D_SUPERVISOR_MODE` = `off` / `shadow`（默认）/ `act`；用非流式 JSON 请求（≤ 512 px 缩略图、温度 0、60 秒超时、失败不重试不阻断）在规划后审查脸眼嘴矩形、拆层后审查图层表、新生成表情后审查闭眼张嘴、嘴部三档阈值都失败时定位嘴部矩形、校验通过后给初版打分（写入 `validation.visualReview`），最终失败时输出白名单诊断码、菜单动作与一句面向用户的中文。`act` 模式另执行免费动作：覆盖修正后的矩形、用更严格提示重做表情一次、把下次重试改为重新规划。每单预算跨尝试保存在任务目录 `supervisor-state.json`：模型调用 8、重规划 2、重绑定 2、重做表情 1、重生成图片 1；付费动作只变成建议。失败包只含阶段、异常类名、去掉路径的短消息与数值指标；全部审查记录留在任务目录 `supervisor/`。
+- 后端新增 MySQL `0014_live2d_diagnosis.sql` / SQLite `0032_live2d_diagnosis.sql`：`live2d_jobs` 增加可空列 `diagnosis_code`、`suggestion`、`retry_hint`、`supervisor_summary`。`POST /internal/live2d/jobs/:id/fail` 接受白名单 `diagnosisCode`（`provider_unavailable` / `background_leak` / `face_not_located` / `expression_failed` / `rig_unstable` / `budget_exhausted`）、`suggestion`（`retry` / `regenerate_image` / `new_input`）与 ≤ 200 字、去控制字符的 `summary`，非法值 400，空请求体兼容旧制作端；`POST /ai/live2d/jobs/:id/retry` 接受 `{"hint":"regenerate_image"}` 并清空上次诊断；`claim` 响应新增 `retryHint`，只在第一次领取时下发并随即清空，租约丢失后的重领不会重复付费动作；任务响应新增 `diagnosisCode`、`suggestion`、`summary`，成功完成时清空。
+- Android 生成记录里失败任务显示服务端诊断摘要与建议：`suggestion=regenerate_image` 且为提示词任务时显示"换背景重新生成"（注明将再消耗一次图片生成，调用 retry 带 `hint`），图片任务改为提示更换图片；无诊断时沿用"生成失败 / 重新生成"。`AnyiApiClient.live2dJobAction` 新增可选 `hint`，只允许 `retry` + `regenerate_image`。新增 `Live2dStudioSupport.kt`（纯函数，便于测试）。
+- 新增测试：制作端 `test_foreground.py`（透明 / 近白 / 杂色背景处理、信箱坐标映射、泄漏检测与裁剪、干净拆层不改动）、`test_supervisor.py`（off 模式不调用、矩形回算与拒绝、预算跨状态文件、诊断白名单与降级、嘴部定位、摘要清洗），`test_pipeline` 新增幅度缩放与校验失败分类，`test_anyi_worker` 新增诊断载荷白名单与 `validation.json` 扩展字段；后端 Live2D 集成测试新增诊断上报、非法值 400、摘要截断、重试提示单次下发与旧制作端空请求体兼容；Android 新增 `Live2dFailureUiTest` 与 `retryWithHintSendsWhitelistedJsonBodyOnly`。
 
 ### 修改
 
-- 无。
+- `tools/live2d-worker/scripts/auto_build.py` 的 `run()` 重构为带恢复动作的阶段流程：阶段名与进度值不变（后端阶段白名单未改），重跑阶段时旧目录改名保留；`--reuse-decomposition` 现同时复制同目录的 `input/` 深度图；新增 CLI 参数 `--background`、`--supervisor-state`；`edit_face` 新增 `strict` 提示；`regions()` 允许在拆层前调用。`01_input_white.png` 文件名保留作为制作端检查点标记，但其背景现为中性灰而不是白。
+- 制作端 `anyi_worker.py`：领取时读取 `retryHint`，`regenerate_image` 时放弃旧图片的全部检查点；构建子进程带 `--supervisor-state <任务目录>/supervisor-state.json`；上报失败时附带尝试目录 `supervisor/diagnosis.json` 里经白名单过滤的诊断；`validation.json` 增加 `motionScale`、`backgroundClipped`、`visualReview`。
+- 文档：`docs/live2d-generation.md` 新增"规则恢复与监督"一节并更新接口表；`docs/security-operations.md` 补充自动质检的图片范围与留存说明；`tools/live2d-worker/README.md` 与 `.env.example` 补充 `IMAGE_BACKGROUND`、`LIVE2D_SUPERVISOR_MODE`、`SUPERVISOR_MODEL`、`SUPERVISOR_REASONING_EFFORT`。
+- 与方案文档的差异：重试提示白名单只保留 `regenerate_image`（背景裁剪已由规则层自动完成，不再需要 `clip_background` 提示）；没有新增阶段名；`face_not_located` 目前只会由模型诊断给出。
 
 ### 修复
 
@@ -39,7 +48,10 @@
 
 ### 运维/部署
 
-- 无。
+- 数据库迁移 MySQL `0014_live2d_diagnosis.sql` / SQLite `0032_live2d_diagnosis.sql`：纯加列、可空、无默认值，服务启动时自动应用，不影响现有数据；回滚执行 `ALTER TABLE live2d_jobs DROP COLUMN diagnosis_code, DROP COLUMN suggestion, DROP COLUMN retry_hint, DROP COLUMN supervisor_summary`，客户端对缺失字段按无诊断处理。
+- 新环境变量都有默认值，线上 `worker.env` 与服务端 `.env` 无需改动：`IMAGE_BACKGROUND`（默认 transparent）、`LIVE2D_SUPERVISOR_MODE`（默认 shadow）、`SUPERVISOR_MODEL`（默认同 `ASTRA_MODEL`）、`SUPERVISOR_REASONING_EFFORT`（默认 low）。不涉及密钥变更。
+- 部署顺序：先部署后端（旧制作端发空请求体仍能标记失败），再在 Mac 发布新的 `releases/<sha>` 并切换 launchd；Android 改动需要随下一个 App 版本发布，本次未提升 versionCode。均需用户授权后执行。
+- 验证：制作端 `unittest discover` 32 项通过（新增 11 项），后端 `npm test` 50 项通过，Android `:app:testDebugUnitTest` 19 项通过（新增 3 项）。用线上任务 `5462ebc4` 第二次尝试的产物回放新流程（复用规划、拆层 PSD 与表情图）：自动判定 `topwear` 泄漏并裁剪（1,014,498 → 146,729 像素，外接框 488,166–794,711，与同图灰底重拆结果一致），校验一次通过，脚底位移 0.0002 px，27 秒。影子模式再回放一次并真实调用 Astra：规划、拆层、收尾三次审查各 11.1 / 9.2 / 13.3 秒，规划关卡判定矩形正确，收尾评分 0.82 并列出闭眼与张嘴细节问题；预算文件正确记录 3 次调用；日志与审查记录中无密钥。
 
 ## 当前发布（2026-09-17）
 

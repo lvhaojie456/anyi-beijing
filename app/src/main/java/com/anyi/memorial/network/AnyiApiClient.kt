@@ -140,10 +140,13 @@ class AnyiApiClient(
         ).getJSONObject("job")
     }
 
-    fun live2dJobAction(jobId: String, action: String): JSONObject {
+    fun live2dJobAction(jobId: String, action: String, hint: String? = null): JSONObject {
         require(action in setOf("cancel", "retry", "activate"))
         require(jobId.matches(Regex("[a-f0-9-]{36}")))
-        return request("POST", "/ai/live2d/jobs/$jobId/$action", authorized = true, body = JSONObject())
+        require(hint == null || (action == "retry" && hint == "regenerate_image")) { "live2d_invalid_hint" }
+        val body = JSONObject()
+        if (hint != null) body.put("hint", hint)
+        return request("POST", "/ai/live2d/jobs/$jobId/$action", authorized = true, body = body)
     }
 
     fun readLive2dFile(jobId: String, file: String): ByteArray {

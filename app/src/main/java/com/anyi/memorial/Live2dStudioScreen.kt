@@ -36,9 +36,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-private data class Live2dJob(val id: String, val status: String, val stage: String, val progress: Int) {
+private data class Live2dJob(
+    val id: String, val status: String, val stage: String, val progress: Int,
+    val diagnosisCode: String? = null, val suggestion: String? = null, val summary: String? = null
+) {
     val active get() = status == "queued" || status == "running"
 }
+
+private fun parseLive2dJob(item: org.json.JSONObject) = Live2dJob(
+    item.getString("id"), item.getString("status"), item.getString("stage"), item.optInt("progress"),
+    item.optString("diagnosisCode").takeIf { it.isNotEmpty() && !item.isNull("diagnosisCode") },
+    item.optString("suggestion").takeIf { it.isNotEmpty() && !item.isNull("suggestion") },
+    item.optString("summary").takeIf { it.isNotEmpty() && !item.isNull("summary") }
+)
 
 @Composable
 internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBack: () -> Unit, onActivated: (String) -> Unit) {
@@ -58,10 +68,7 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
 
     suspend fun refreshJobs() {
         val response = withContext(Dispatchers.IO) { api.listLive2dJobs(companion.id) }
-        jobs = List(response.length()) { index ->
-            val item = response.getJSONObject(index)
-            Live2dJob(item.getString("id"), item.getString("status"), item.getString("stage"), item.optInt("progress"))
-        }
+        jobs = List(response.length()) { index -> parseLive2dJob(response.getJSONObject(index)) }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) scope.launch {
@@ -96,11 +103,11 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
             delay(8000)
         }
     }
-    fun action(job: Live2dJob, command: String) {
+    fun action(job: Live2dJob, command: String, hint: String? = null) {
         if (busy) return
         busy = true; error = ""
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { api.live2dJobAction(job.id, command) } }
+            runCatching { withContext(Dispatchers.IO) { api.live2dJobAction(job.id, command, hint) } }
                 .onSuccess {
                     if (command == "activate") onActivated("generated:${job.id}")
                     else refresh++
@@ -161,7 +168,7 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
                     scope.launch {
                         runCatching { withContext(Dispatchers.IO) { api.createLive2dJob(companion.id, sentPrompt, sentFile, requestId) } }
                             .onSuccess { submitted ->
-                                val created = Live2dJob(submitted.getString("id"), submitted.getString("status"), submitted.getString("stage"), submitted.optInt("progress"))
+                                val created = parseLive2dJob(submitted)
                                 jobs = listOf(created) + jobs.filterNot { it.id == created.id }
                                 requestId = UUID.randomUUID().toString(); refresh++
                             }
@@ -199,7 +206,18 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
                         Spacer(Modifier.weight(1f))
                         Button(onClick = { action(job,"activate") }, enabled = !busy) { Text("使用此形象") }
                     }
-                } else TextButton(onClick = { action(job,"retry") }, enabled = enabled == true && !busy && jobs.none { it.active }) { Text("重新生成") }
+                } else {
+                    val failure = live2dFailureUi(job.diagnosisCode, job.suggestion, job.summary, hasSourceImage = mode == "image")
+                    if (job.status == "failed") Text(failure.message, fontSize = 13.sp, color = Color(0xFF7A4B3A))
+                    failure.primaryNote?.let { Text(it, fontSize = 12.sp, color = Color(0xFF65756D)) }
+                    val canRetry = enabled == true && !busy && jobs.none { it.active }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (job.status == "failed" && failure.primaryLabel != null) {
+                            Button(onClick = { action(job, "retry", failure.primaryHint) }, enabled = canRetry) { Text(failure.primaryLabel) }
+                        }
+                        TextButton(onClick = { action(job, "retry") }, enabled = canRetry) { Text(if (job.status == "failed") failure.retryLabel else "重新生成") }
+                    }
+                }
                 HorizontalDivider()
             }
         }
