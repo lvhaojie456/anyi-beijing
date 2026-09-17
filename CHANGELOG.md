@@ -21,6 +21,28 @@
 
 ## 未发布
 
+### 新增
+
+- 无。
+
+### 修改
+
+- 无。
+
+### 修复
+
+- 无。
+
+### 移除
+
+- 无。
+
+### 运维/部署
+
+- 无。
+
+## 当前发布（2026-09-17）
+
 ### 2026-09-17 线上发布准备
 
 - Android 版本更新为 `1.0.18`（versionCode 20），沿用现有 release-v2 签名。
@@ -93,6 +115,7 @@
 - 验证：本次清理后后端 `npm test` 50 项通过；Android `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest` 在本机 SDK（build-tools 36.1.0、JDK 21）通过，16 项单元测试全部通过；制作端 `unittest discover` 16 项通过。未构建 release 包，未部署。
 - 验证：制作端 `unittest discover` 21 项通过（新增 5 项）。用线上任务 `5462ebc4` 第二次尝试的真实产物在本机 dry-run（复用规划、拆层 PSD 与表情图，不调用供应商）：精修、绑定阶段通过，嘴部按阈值 120 测出；但校验阶段以 `feet max displacement=0.32 px`（阈值 0.25）失败。原因是 4090 See-through 把这张白底写实图的整个背景并入 `topwear` 图层（bbox 覆盖 213–1067 × 0–1280 整幅画布，约 101 万像素，正常应约 12 万），呼吸变形器因此固定到画布底部并带动脚部；该问题与本次修复无关，即使修复发布后重试此任务仍会在校验阶段失败，需要另行处理（重新生成非白底图片或在拆层后按前景轮廓裁掉背景）。
 - 制作端新增可选环境变量 `ASTRA_STREAM_RETRIES`（默认 1，`.env.example` 已补充），无需改动线上 `worker.env`。本次修复只涉及 Mac 制作端代码，线上 API、数据库与 Android 均无变化；生效需要在 Mac 上以合并后的提交发布新的 `releases/<sha>` 目录并切换 launchd，未经授权前不部署。
+- 部署（2026-09-17 23:22–23:29 CST，用户授权）：线上后端由 PR #3 分支的 `e1c8e3a` 切换到 `main` 的 `7f8938f`（含 PR #4、#5、#6），Mac 制作端 launchd 切换到 `releases/7f8938f`。部署前已运行 `anyi-mysql-backup.service`（`anyi-mysql-anyi_memorial-20260917-232532.sql.gz` / `anyi-uploads-20260917-232532.tar.gz`）。服务器用同一 `tsc` 先重建 `e1c8e3a` 得到与线上一致的哈希 `e404f79ea1e3`，再构建 `7f8938f` 得到 `df3f9db09af7`（与本机构建一致）。无新迁移，`_node_migrations` 保持 13 行；`.env`、`node_modules`、Nginx 未改动。回滚副本：`/opt/anyi-releases/before-main-20260917-7f8938f`、`/opt/anyiapp2/backend/dist-node.pre-main-20260917-7f8938f`、`~/Library/LaunchAgents/cn.anyibj.live2d-worker.plist.bak-e1c8e3a`。验证：三项服务 active，本地与公网 `/health` 均 ok，重启后 journal 无错误、Nginx 全部 200、无凭据访问改动路径均 401；制作端 claim 轮询 200、`worker.err` 无新增。详见 `docs/releases/2026-09-17-main-7f8938f.md`。
 
 ## 当前发布（2026-09-08）
 
