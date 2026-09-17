@@ -56,7 +56,7 @@ Mac 制作端（tools/live2d-worker）
 
 回滚：先设 `LIVE2D_ENABLED=false`，停止制作端，回滚 API/App。不要立即删除任务表，保留工程文件和历史；新增字段为可空列。
 
-本次为本地代码接入，没有部署生产服务或发布商店版本。真实生成对任意照片的成功率以及 `.cmo3` 在编辑器中的完整兼容性仍待继续完善；UI 明确将结果标为待精修初版。
+2026-09-17 已授权部署线上 API、MySQL 迁移、Mac 常驻制作端与正式签名 1.0.18 APK 下载，见 [发布记录](releases/2026-09-17-live2d.md)。未执行应用商店发布。真实生成对任意照片的成功率以及 `.cmo3` 在编辑器中的完整兼容性仍待继续完善；UI 明确将结果标为待精修初版。
 
 ## 验证
 
@@ -80,3 +80,5 @@ node scripts/smoke-live2d.mjs ../tools/live2d-worker /path/to/verified-output /p
 - 使用 App 原始 HTML 和 SDK 的 Playwright 验证：390×700 与 1200×800 均能载入模型；WebGL 有效像素分别超过 8 万、11 万；截图非空、运动帧发生变化，无页面脚本错误。截图与报告位于本机 `.tmp/live2d-smoke-VHORS5/`。
 - 另一次 `--generate` 真实新任务成功创建并领取，在 Astra 规划阶段遭遇供应商 Apexin 504。续约期间状态保持 running，异常后 worker 回传 failed / generation_failed。该轮未进入后续 GPU 阶段，不能算作全新生成成功。本地诊断位于 `.tmp/live2d-smoke-X2LjAx/`。
 - 当前未执行 MySQL 实库迁移、Android 真机操作、生产部署或商店发布；新增 MySQL SQL 使用与既有项目一致的字段/外键风格，上线前应在预发布库应用并验收。
+
+上述为接入阶段记录。后续同日线上发布已完成 MySQL 隔离恢复迁移、生产迁移和全新图片任务验收，详见 [线上发布记录](releases/2026-09-17-live2d.md)。尚未执行应用商店上架和 Android 真机手工验收。
