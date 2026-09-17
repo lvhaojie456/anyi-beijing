@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
  */
 @Composable
 internal fun Live2dChatScreen(
+    api: com.anyi.memorial.network.AnyiApiClient,
     user: AppUser,
     companion: AiCompanion,
     modelId: String,
@@ -100,6 +101,7 @@ internal fun Live2dChatScreen(
                     .weight(1.15f)
             ) {
                 Live2dAvatarView(
+                    api = api,
                     modelId = modelId,
                     modifier = Modifier.fillMaxSize(),
                     speakText = speakText,

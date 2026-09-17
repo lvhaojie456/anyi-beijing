@@ -63,6 +63,8 @@ const env = {
   AI_MEMORY_MODEL: process.env.AI_MEMORY_MODEL || "",
   AI_TIMEOUT_MS: process.env.AI_TIMEOUT_MS || "90000",
   AI_VOICE_ENABLED: process.env.AI_VOICE_ENABLED || "false",
+  LIVE2D_ENABLED: process.env.LIVE2D_ENABLED || "false",
+  LIVE2D_WORKER_TOKEN: process.env.LIVE2D_WORKER_TOKEN || "",
   AI_VOICE_RETAIN_AUDIO: process.env.AI_VOICE_RETAIN_AUDIO || "true",
   ASR_PROVIDER: process.env.ASR_PROVIDER || "openai-compatible",
   ASR_BASE_URL: process.env.ASR_BASE_URL || "",

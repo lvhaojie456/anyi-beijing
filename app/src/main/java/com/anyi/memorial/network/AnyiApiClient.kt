@@ -3,6 +3,7 @@ package com.anyi.memorial.network
 import com.anyi.memorial.BuildConfig
 import java.io.DataOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -124,6 +125,55 @@ class AnyiApiClient(
             authorized = true,
             body = JSONObject().put("live2dModel", live2dModel ?: JSONObject.NULL)
         )
+    }
+
+    fun live2dConfig(): JSONObject = request("GET", "/ai/live2d/config", authorized = true)
+
+    fun listLive2dJobs(companionId: String): JSONArray =
+        request("GET", "/ai/companions/$companionId/live2d/jobs", authorized = true).getJSONArray("jobs")
+
+    fun createLive2dJob(companionId: String, prompt: String, file: UploadPayload?, requestId: String): JSONObject {
+        require(prompt.isNotBlank() || file != null) { "live2d_input_required" }
+        return multipartRequest(
+            path = "/ai/companions/$companionId/live2d/jobs",
+            fields = mapOf("prompt" to prompt), files = listOfNotNull(file), idempotencyKey = requestId
+        ).getJSONObject("job")
+    }
+
+    fun live2dJobAction(jobId: String, action: String): JSONObject {
+        require(action in setOf("cancel", "retry", "activate"))
+        require(jobId.matches(Regex("[a-f0-9-]{36}")))
+        return request("POST", "/ai/live2d/jobs/$jobId/$action", authorized = true, body = JSONObject())
+    }
+
+    fun readLive2dFile(jobId: String, file: String): ByteArray {
+        val output = java.io.ByteArrayOutputStream()
+        downloadLive2dFile(jobId, file, output, 32L * 1024 * 1024)
+        return output.toByteArray()
+    }
+
+    fun downloadLive2dFile(jobId: String, file: String, output: OutputStream, maxBytes: Long = 240L * 1024 * 1024) {
+        require(jobId.matches(Regex("[a-f0-9-]{36}"))) { "live2d_invalid_id" }
+        require(file.length <= 200 && file.matches(Regex("[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*")) &&
+            file.split('/').none { it == "." || it == ".." }) { "live2d_invalid_path" }
+        val connection = openConnection(baseUrls.first(), "/ai/live2d/jobs/$jobId/files/$file", "GET", true)
+        connection.instanceFollowRedirects = false
+        connection.readTimeout = 120_000
+        try {
+            if (connection.responseCode != 200) { parseResponse(connection); throw IOException("live2d_file_unavailable") }
+            if (connection.contentLengthLong > maxBytes) throw IOException("live2d_file_too_large")
+            connection.inputStream.use { input ->
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val size = input.read(buffer)
+                    if (size < 0) break
+                    total += size
+                    if (total > maxBytes) throw IOException("live2d_file_too_large")
+                    output.write(buffer, 0, size)
+                }
+            }
+        } finally { connection.disconnect() }
     }
 
     fun uploadAiCompanionChatBackground(companionId: String, file: UploadPayload): JSONObject {

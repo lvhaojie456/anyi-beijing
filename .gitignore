@@ -72,3 +72,6 @@ anyi-open-latest.png
 
 # Local Live2D preview scratch (not part of the product)
 /tmp-live2d-preview/
+tools/live2d-worker/.venv/
+tools/live2d-worker/work/
+tools/live2d-worker/outputs/

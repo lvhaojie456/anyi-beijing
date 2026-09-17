@@ -10,17 +10,26 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
 import org.json.JSONObject
+import com.anyi.memorial.network.AnyiApiClient
+import java.io.ByteArrayInputStream
+
+internal fun generatedLive2dJobId(modelId: String?): String? = modelId
+    ?.takeIf { it.matches(Regex("generated:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")) }
+    ?.removePrefix("generated:")
+
+internal fun supportedLive2dModel(modelId: String?): Boolean =
+    Live2dCatalog.find(modelId) != null || generatedLive2dJobId(modelId) != null
 
 /**
  * Catalogue of Live2D avatars bundled in the APK under assets/live2d/models/<id>/.
@@ -50,11 +59,11 @@ internal sealed interface Live2dEvent {
 }
 
 /**
- * A Compose-hosted WebView that renders one Live2D model from bundled assets.
+ * A Compose-hosted WebView that renders bundled or owner-scoped generated models.
  *
- * Everything is served from the APK through WebViewAssetLoader under the
- * https://appassets.androidplatform.net/assets/live2d/ origin, so the page
- * needs no network access, and file:// is never used.
+ * The HTML and runtime are bundled. Generated model data is fetched by the
+ * native authenticated API client and exposed only on a job-scoped virtual
+ * same-origin path; the page never receives credentials or file access.
  *
  * `speakText` is a "signal": every time it changes to a non-null value the
  * avatar plays a talk animation sized to the text length. Callers should bump
@@ -66,6 +75,7 @@ internal fun Live2dAvatarView(
     modelId: String,
     modifier: Modifier = Modifier,
     speakText: String? = null,
+    api: AnyiApiClient? = null,
     onEvent: (Live2dEvent) -> Unit = {}
 ) {
     val latestOnEvent by rememberUpdatedState(onEvent)
@@ -73,10 +83,12 @@ internal fun Live2dAvatarView(
     var pageReady by remember { mutableStateOf(false) }
     var loadedModel by remember { mutableStateOf<String?>(null) }
 
-    AndroidView(
+    key(modelId) { AndroidView(
         modifier = modifier,
         factory = { context ->
-            createLive2dWebView(context) { event ->
+            pageReady = false
+            loadedModel = null
+            createLive2dWebView(context, generatedLive2dJobId(modelId), api) { event ->
                 when (event) {
                     Live2dEvent.PageReady -> pageReady = true
                     is Live2dEvent.Ready -> loadedModel = event.modelId
@@ -84,15 +96,25 @@ internal fun Live2dAvatarView(
                 }
                 latestOnEvent(event)
             }.also { webView = it }
+        },
+        onRelease = { view ->
+            view.stopLoading()
+            view.removeJavascriptInterface("AndroidBridge")
+            view.loadUrl("about:blank")
+            (view.parent as? ViewGroup)?.removeView(view)
+            view.destroy()
+            if (webView === view) webView = null
         }
-    )
+    ) }
 
     // Load (or switch) the model once the page has booted.
     LaunchedEffect(pageReady, modelId) {
         val view = webView ?: return@LaunchedEffect
         if (!pageReady) return@LaunchedEffect
         if (loadedModel == modelId) return@LaunchedEffect
-        view.evaluateJavascript("window.anyiLive2d && window.anyiLive2d.load(${JSONObject.quote(modelId)})", null)
+        val jobId = generatedLive2dJobId(modelId)
+        val modelUrl = jobId?.let { "$LIVE2D_ORIGIN/generated-live2d/$it/runtime/model.model3.json" }
+        view.evaluateJavascript("window.anyiLive2d && window.anyiLive2d.load(${JSONObject.quote(modelId)}, ${modelUrl?.let(JSONObject::quote) ?: "null"})", null)
     }
 
     // Trigger talk animation on each new reply.
@@ -107,24 +129,13 @@ internal fun Live2dAvatarView(
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            webView?.let { view ->
-                view.stopLoading()
-                view.loadUrl("about:blank")
-                (view.parent as? ViewGroup)?.removeView(view)
-                view.destroy()
-            }
-            webView = null
-        }
-    }
 }
 
 private const val LIVE2D_ORIGIN = "https://appassets.androidplatform.net"
 private const val LIVE2D_PATH = "/assets/live2d/"
 
 @SuppressLint("SetJavaScriptEnabled")
-private fun createLive2dWebView(context: Context, emit: (Live2dEvent) -> Unit): WebView {
+private fun createLive2dWebView(context: Context, jobId: String?, api: AnyiApiClient?, emit: (Live2dEvent) -> Unit): WebView {
     val assetLoader = WebViewAssetLoader.Builder()
         .setDomain("appassets.androidplatform.net")
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
@@ -140,6 +151,7 @@ private fun createLive2dWebView(context: Context, emit: (Live2dEvent) -> Unit): 
         settings.domStorageEnabled = false
         settings.allowFileAccess = false
         settings.allowContentAccess = false
+        settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
         settings.loadWithOverviewMode = true
         settings.useWideViewPort = true
         settings.mediaPlaybackRequiresUserGesture = false
@@ -163,12 +175,31 @@ private fun createLive2dWebView(context: Context, emit: (Live2dEvent) -> Unit): 
             override fun shouldInterceptRequest(
                 view: WebView,
                 request: WebResourceRequest
-            ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
+            ): WebResourceResponse? {
+                val url = request.url
+                fun denied() = WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                if (url.scheme != "https" || url.host != "appassets.androidplatform.net" || url.port !in listOf(-1,443) || request.method != "GET") return denied()
+                if (url.path?.startsWith(LIVE2D_PATH) == true) return assetLoader.shouldInterceptRequest(url) ?: denied()
+                val prefix = "/generated-live2d/$jobId/"
+                val path = url.path.orEmpty()
+                if (jobId == null || api == null || !path.startsWith(prefix) || url.query != null) return denied()
+                val name = path.removePrefix(prefix)
+                if (!name.startsWith("runtime/")) return denied()
+                return try {
+                    val bytes = api.readLive2dFile(jobId, name)
+                    val mime = when {
+                        name.endsWith(".json") -> "application/json"
+                        name.endsWith(".png") -> "image/png"
+                        else -> "application/octet-stream"
+                    }
+                    WebResourceResponse(mime, null, 200, "OK", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(bytes))
+                } catch (_: Exception) { denied() }
+            }
 
             // Keep the page sandboxed to bundled assets: refuse any navigation
             // away from the asset origin.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                return !request.url.toString().startsWith(LIVE2D_ORIGIN)
+                return request.url.toString() != "$LIVE2D_ORIGIN${LIVE2D_PATH}index.html"
             }
         }
         loadUrl("$LIVE2D_ORIGIN${LIVE2D_PATH}index.html")
