@@ -17,7 +17,7 @@
 - 当前分支：`main`
 - 最新已提交基线：`dc10657 docs: align launch materials with current Android product`
 - 当前工作树有大量未提交变更，包含 Android、后端、测试、文档和目录迁移。不要使用 `git reset --hard` 或丢弃用户改动。
-- 当前项目只讨论 Android 和腾讯云生产路线；`huawei-harmonyos/` 保留为独立目录，除非用户明确要求，不要修改华为版本。
+- 当前项目只讨论 Android 和腾讯云生产路线。华为 HarmonyOS 客户端（原 `huawei-harmonyos/` 目录）已于 2026-09-17 经用户确认删除，需要时可从提交 `5be7ea1` 恢复。
 - GitHub 操作要求：不要直接合并到 `main`，应创建 Pull Request，PR 标题使用中文。
 - 每次新增、修改、修复、删除、迁移、部署都必须同步写入根目录 `CHANGELOG.md`。
 

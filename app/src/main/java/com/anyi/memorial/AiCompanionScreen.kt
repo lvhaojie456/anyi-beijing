@@ -337,7 +337,7 @@ private data class AiConversationState(
 private const val maxQueuedAiMessages = 20
 
 private data class AiCompanionMemory(val id: String, val content: String)
-private data class AiImageModel(val id: String, val name: String, val description: String)
+private data class AiImageModel(val id: String, val name: String)
 private data class AvatarStudioMessage(
     val id: String = UUID.randomUUID().toString(),
     val mine: Boolean,
@@ -1846,7 +1846,7 @@ private fun isAmbiguousCompanionRelation(value: String): Boolean {
 
 private fun parseCompanion(item: JSONObject) = AiCompanion(
     id = item.optString("id"),
-    displayName = item.optString("displayName", item.optString("name", "未命名对象")),
+    displayName = item.optString("displayName", "未命名对象"),
     relation = item.optString("relation"),
     chatBackgroundUrl = item.optString("chatBackgroundUrl").takeIf { it.isNotBlank() && it != "null" },
     live2dModel = item.optString("live2dModel").takeIf { it.isNotBlank() && it != "null" },
@@ -1858,12 +1858,7 @@ private fun parseCompanion(item: JSONObject) = AiCompanion(
 )
 
 private fun parseCompanionResponse(response: JSONObject, fallback: AiCompanion): AiCompanion {
-    response.optJSONObject("companion")?.let { return parseCompanion(it) }
-    response.optJSONObject("profile")?.let { return parseCompanion(it) }
-    val url = listOf("avatarUrl", "imageUrl", "url").firstNotNullOfOrNull { key -> response.optString(key).takeIf { it.isNotBlank() } }
-        ?: response.optJSONObject("asset")?.optString("url")?.takeIf { it.isNotBlank() }
-        ?: response.optJSONObject("avatar")?.optString("url")?.takeIf { it.isNotBlank() }
-    return if (url == null) fallback else fallback.copy(avatarUrl = url, generated = true, updatedAt = System.currentTimeMillis())
+    return response.optJSONObject("companion")?.let(::parseCompanion) ?: fallback
 }
 
 private fun parseCompanionTimestamp(raw: String): Long? {
@@ -1945,8 +1940,8 @@ private fun parseMemories(array: JSONArray): List<AiCompanionMemory> = List(arra
 private fun parseMemory(item: JSONObject) = AiCompanionMemory(item.optString("id"), item.optString("content"))
 private fun parseImageModels(array: JSONArray): List<AiImageModel> = List(array.length()) { index ->
     val item = array.optJSONObject(index) ?: JSONObject()
-    val id = item.optString("id", item.optString("model"))
-    AiImageModel(id, item.optString("name", item.optString("label", id)), item.optString("description"))
+    val id = item.optString("id")
+    AiImageModel(id, item.optString("label", id))
 }.filter { it.id.isNotBlank() }
 
 private fun Throwable.companionError(fallback: String): String {
@@ -1965,7 +1960,7 @@ private fun Throwable.companionError(fallback: String): String {
         detail.contains("voice_type_invalid") || detail.contains("voice_signature_mismatch") || detail.contains("voice_audio_invalid") -> "语音格式暂不支持，请重新录制"
         detail.contains("voice_size_invalid") -> "语音文件过大，请缩短后重试"
         detail.contains("voice_duration_mismatch") -> "语音时长校验失败，请重新录制"
-        detail.contains("voice_duration_invalid") || detail.contains("voice_too_long") -> "语音时长需在 1～60 秒之间"
+        detail.contains("voice_duration_invalid") -> "语音时长需在 1～60 秒之间"
         detail.contains("upload_request_id_required") -> "语音请求无效，请重新录制"
         detail.contains("voice_processing") -> "这条语音正在处理中，请稍后查看"
         detail.contains("rate_limit_exceeded") -> "语音发送太频繁，请稍后再试"
