@@ -376,6 +376,7 @@ internal fun AiCompanionScreen(
     // normal chat, so toggling it never duplicates history or the FIFO worker.
     var immersive by rememberSaveable(user.token) { mutableStateOf(false) }
     var showLive2dPicker by remember { mutableStateOf(false) }
+    var live2dStudioTarget by remember { mutableStateOf<AiCompanion?>(null) }
     var live2dSaving by remember { mutableStateOf(false) }
     val selected = selectedId?.let { id -> companions.firstOrNull { it.id == id } }
 
@@ -749,8 +750,9 @@ internal fun AiCompanionScreen(
         }
     }
 
-    BackHandler(enabled = studioTarget != null || selected != null) {
+    BackHandler(enabled = live2dStudioTarget != null || studioTarget != null || selected != null) {
         when {
+            live2dStudioTarget != null -> live2dStudioTarget = null
             studioTarget != null -> studioTarget = null
             immersive -> immersive = false
             selected != null -> {
@@ -762,6 +764,15 @@ internal fun AiCompanionScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(CompanionBackground)) {
         when {
+            live2dStudioTarget != null -> Live2dStudioScreen(
+                api = api, companion = live2dStudioTarget!!,
+                onBack = { live2dStudioTarget = null },
+                onActivated = { modelId ->
+                    live2dStudioTarget?.let { replaceCompanion(it.copy(live2dModel = modelId)) }
+                    live2dStudioTarget = null
+                    immersive = true
+                }
+            )
             studioTarget != null -> AvatarStudioScreen(
                 api = api,
                 companion = studioTarget!!,
@@ -785,8 +796,9 @@ internal fun AiCompanionScreen(
             )
             else -> {
                 val boundModel = selected!!.live2dModel
-                if (immersive && boundModel != null && Live2dCatalog.find(boundModel) != null) {
+                if (immersive && boundModel != null && supportedLive2dModel(boundModel)) {
                     Live2dChatScreen(
+                        api = api,
                         user = user,
                         companion = selected!!,
                         modelId = boundModel,
@@ -836,6 +848,7 @@ internal fun AiCompanionScreen(
             current = selected.live2dModel,
             saving = live2dSaving,
             onDismiss = { if (!live2dSaving) showLive2dPicker = false },
+            onCreate = { live2dStudioTarget = selected; showLive2dPicker = false },
             onPick = { modelId ->
                 updateLive2dModel(selected, modelId) { showLive2dPicker = false; if (modelId != null) immersive = true }
             }
@@ -1985,6 +1998,7 @@ private fun Live2dPickerDialog(
     current: String?,
     saving: Boolean,
     onDismiss: () -> Unit,
+    onCreate: () -> Unit,
     onPick: (String?) -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -2020,6 +2034,9 @@ private fun Live2dPickerDialog(
                         }
                         if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
+                }
+                Button(onClick = onCreate, enabled = !saving, modifier = Modifier.fillMaxWidth()) {
+                    Text("创建我的动态形象")
                 }
                 if (current != null) {
                     OutlinedButton(

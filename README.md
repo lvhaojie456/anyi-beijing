@@ -18,6 +18,8 @@ docs/                      上线、合规和运维文档
 
 每次功能、代码、配置、数据库、文档或资源变更都记录在 [更新日志](CHANGELOG.md)；提交 Pull Request 前必须同步填写，删除内容也要明确写在“移除”小节。
 
+Android 已接入提示词/图片生成 Live2D 初版的异步工作流，制作端源码位于 `tools/live2d-worker/`，启用和部署见 [Live2D 生成接入](docs/live2d-generation.md)。生成服务默认关闭，需要部署后台和运行制作端。
+
 当前项目已统一切到腾讯云部署路线：
 
 - Android 包名：`com.anyi.memorial`

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { isIP } from "node:net";
+import { Live2dError, live2dUploadLimit, registerLive2dRoutes } from "./live2d.js";
 
 type Role = "user" | "admin";
 
@@ -32,6 +33,8 @@ type Bindings = {
   TENCENT_ASR_ENGINE_MODEL_TYPE?: string;
   TENCENT_ASR_ENDPOINT?: string;
   AI_VOICE_RETAIN_AUDIO?: string;
+  LIVE2D_ENABLED?: string;
+  LIVE2D_WORKER_TOKEN?: string;
   WECHAT_APP_ID?: string;
   WECHAT_APP_SECRET?: string;
   LEGAL_OPERATOR_NAME?: string;
@@ -88,7 +91,7 @@ type AuthUser = {
   aiCompanionListBackgroundUrl: string | null;
 };
 
-type AppEnv = {
+export type AppEnv = {
   Bindings: Bindings;
   Variables: {
     user: AuthUser;
@@ -242,6 +245,7 @@ type AiCompanionRow = {
   relation: string;
   chat_background_url?: string | null;
   live2d_model?: string | null;
+  live2d_job_id?: string | null;
   avatar_url: string | null;
   smile_avatar_url: string | null;
   avatar_motion_json: string;
@@ -491,11 +495,11 @@ async function corsMiddleware(c: Context<AppEnv>, next: () => Promise<void>) {
 
 async function requestBodyLimitMiddleware(c: Context<AppEnv>, next: () => Promise<void>) {
   const contentType = (c.req.header("Content-Type") || "").toLowerCase();
-  const maxBytes = contentType.includes("application/json")
+  const maxBytes = live2dUploadLimit(c) ?? (contentType.includes("application/json")
     ? maxJsonBodyBytes
     : contentType.includes("multipart/form-data")
       ? maxMultipartBodyBytes
-      : maxGenericBodyBytes;
+      : maxGenericBodyBytes);
   const contentLengthHeader = c.req.header("Content-Length");
   const contentLength = Number(contentLengthHeader || "");
   if (contentLengthHeader && Number.isFinite(contentLength) && contentLength > maxBytes) {
@@ -636,6 +640,9 @@ function saveAiCompanionSql(dialect: DatabaseDialect) {
 }
 
 app.onError((error) => {
+  if (error instanceof Live2dError) {
+    return jsonResponse({ error: error.code }, error.status);
+  }
   if (error instanceof ApiError) {
     return jsonResponse({ error: error.code, details: error.details }, error.status);
   }
@@ -681,6 +688,8 @@ const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   c.set("user", user);
   await next();
 };
+
+registerLive2dRoutes(app, requireAuth, requireCompanionAvatar);
 
 app.post("/crash-reports", requireAuth, async (c) => {
   const user = c.get("user");
@@ -1062,6 +1071,7 @@ app.delete("/me", requireAuth, async (c) => {
     ["DELETE FROM ai_chat_messages WHERE user_id = ?", [user.id]],
     ["DELETE FROM ai_memory_items WHERE user_id = ?", [user.id]],
     ["DELETE FROM ai_memory_settings WHERE user_id = ?", [user.id]],
+    ["DELETE FROM live2d_jobs WHERE user_id = ?", [user.id]],
     ["DELETE FROM ai_companions WHERE user_id = ?", [user.id]],
     ["DELETE FROM ai_profiles WHERE user_id = ?", [user.id]],
     ["DELETE FROM feature_unlocks WHERE user_id = ?", [user.id]],
@@ -2165,8 +2175,7 @@ app.patch("/ai/companions/:id/background", requireAuth, async (c) => {
   return c.json({ companion: serializeAiCompanion(await loadAiCompanionRow(c, companion.id)) });
 });
 
-// Bind a bundled Live2D avatar to the companion. Models ship inside the Android
-// APK, so the server only stores an allow-listed id; it never serves model files.
+// Bundled selection also clears any generated model binding.
 app.patch("/ai/companions/:id/live2d", requireAuth, async (c) => {
   const companion = await loadAiCompanionRow(c, c.req.param("id"));
   const user = c.get("user");
@@ -2177,7 +2186,7 @@ app.patch("/ai/companions/:id/live2d", requireAuth, async (c) => {
     throw new ApiError(400, "live2d_model_not_supported", { allowed: [...live2dModelIds] });
   }
   await c.env.DB.prepare(
-    "UPDATE ai_companions SET live2d_model = ?, updated_at = ? WHERE id = ? AND user_id = ?"
+    "UPDATE ai_companions SET live2d_model = ?, live2d_job_id = NULL, updated_at = ? WHERE id = ? AND user_id = ?"
   ).bind(live2dModel, new Date().toISOString(), companion.id, user.id).run();
   return c.json({ companion: serializeAiCompanion(await loadAiCompanionRow(c, companion.id)) });
 });
@@ -2210,6 +2219,12 @@ app.delete("/ai/companions/:id", requireAuth, async (c) => {
   // left behind after this transaction finishes.
   return withAiConversationLock(`${userId}:${companionId}`, async () => {
     const companion = await loadAiCompanionRow(c, companionId);
+    const live2dAssets = await c.env.DB.prepare("SELECT asset_key FROM assets WHERE owner_id = ? AND asset_key LIKE ?")
+      .bind(userId,`${userId}/ai/live2d/${companion.id}/%`).all<{asset_key:string}>();
+    const live2dQueueColumn = await assetDeleteQueueKeyColumn(c);
+    const live2dCleanup = live2dAssets.results.map(asset => c.env.DB.prepare(
+      `INSERT INTO asset_delete_queue (id,owner_id,${live2dQueueColumn},reason,created_at) VALUES (?,?,?,?,?)`
+    ).bind(crypto.randomUUID(),userId,asset.asset_key,"live2d_companion_deleted",new Date().toISOString()));
     const voiceRows = await c.env.DB.hasColumn("ai_chat_messages", "audio_url")
       ? await c.env.DB.prepare(
         "SELECT audio_url FROM ai_chat_messages WHERE user_id = ? AND companion_id = ? AND audio_url IS NOT NULL"
@@ -2219,6 +2234,7 @@ app.delete("/ai/companions/:id", requireAuth, async (c) => {
       [companion.avatar_url, companion.smile_avatar_url].filter((value): value is string => Boolean(value))
     )];
     await c.env.DB.batch([
+      ...live2dCleanup,
       c.env.DB.prepare("DELETE FROM ai_memory_items WHERE user_id = ? AND companion_key = ?").bind(userId, companion.id),
       c.env.DB.prepare("DELETE FROM ai_chat_messages WHERE user_id = ? AND companion_id = ?").bind(userId, companion.id),
       c.env.DB.prepare("DELETE FROM ai_companions WHERE id = ? AND user_id = ?").bind(companion.id, userId)
@@ -4336,6 +4352,11 @@ async function queueAssetDelete(
 }
 
 async function assetDeletionAllowed(c: Context<AppEnv>, assetKey: string, reason: string) {
+  if (await c.env.DB.hasColumn("ai_companions", "live2d_job_id")) {
+    const artifact = await c.env.DB.prepare("SELECT job_id FROM live2d_artifacts WHERE asset_key = ? LIMIT 1").bind(assetKey).first();
+    const source = await c.env.DB.prepare("SELECT id FROM live2d_jobs WHERE source_key = ? LIMIT 1").bind(assetKey).first();
+    if (artifact || source) return false;
+  }
   const asset = await c.env.DB.prepare(
     `SELECT a.visibility,
        a.url,
@@ -6307,7 +6328,7 @@ function serializeAiCompanion(row: AiCompanionRow) {
     displayName: row.display_name,
     relation: row.relation,
     chatBackgroundUrl: row.chat_background_url || null,
-    live2dModel: row.live2d_model || null,
+    live2dModel: row.live2d_job_id ? `generated:${row.live2d_job_id}` : row.live2d_model || null,
     avatarUrl: row.avatar_url,
     generated: Boolean(row.generated),
     latestMessage: row.latest_message || "",

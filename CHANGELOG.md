@@ -21,8 +21,19 @@
 
 ## 未发布
 
+### 2026-09-17 线上发布准备
+
+- Android 版本更新为 `1.0.18`（versionCode 20），沿用现有 release-v2 签名。
+- Nginx 增加仅制作端路径的 256 MB 上传配置，通用上传限制仍为 60 MB；制作端支持外部私有环境文件与 launchd 常驻。
+- Astra 拆层规划改用流式响应，默认 low 推理强度，避免长非流式响应等待；异常或不完整输出不会发布为成功。
+- 部署前已运行 MySQL 和 uploads 备份；只新增 0013 迁移，历史迁移哈希与线上一致。
+
 ### 新增
 
+- Android 陪伴对象新增“创建我的动态形象”，支持提示词/图片提交、后台任务进度、取消/重试、预览、精修 ZIP 下载及绑定到沉浸聊天。
+- 后端新增 Live2D 私有生成任务、租约制作协议、哈希上传、完整性校验和模型文件读取；新增 SQLite 0031 / MySQL 0013 非破坏性迁移。
+- `tools/live2d-worker/` 纳入已实测的图生 Live2D 流水线及出站轮询适配器；`docs/live2d-generation.md` 记录安装、部署和验证范围。
+- 新增任务所有权、幂等、取消与租约、路径限制、Android 请求/下载及真实产物 WebGL 联调测试。
 - 新增 `docs/codex-handover.md`，记录当前 Android、后端、腾讯云生产边界，以及照片数字人视频通话的实施路线和接手步骤。
 - Android 新增 Live2D 动态形象与沉浸式聊天模式。APK 内置 6 个 Live2D Cubism 4 官方样例模型（Kei、Izumi、Haru、Hiyori、Tororo 白猫、Hijiki 黑猫，约 17 MB，已剔除示例语音与编辑器源文件），用户在聊天页"更多"菜单里为陪伴对象选择一个形象并绑定，进入"沉浸模式"后形象显示在聊天上方，AI 回复到达时播放说话动画，下方沿用同一条文字聊天流。形象与陪伴对象一一绑定，切换对象自动切换形象。
 - 新增 `Live2dAvatarView.kt`：用 Android `WebView` + `WebViewAssetLoader` 从 APK 资产渲染 Live2D（pixi.js + pixi-live2d-display + Cubism Core，全部本地打包，不访问网络；禁用文件与内容访问，拒绝跳离资产域）。新增 `Live2dChatScreen.kt` 沉浸式聊天页，复用 `AiCompanionScreen` 现有的消息列表、草稿与按对象 FIFO 发送队列，不新增任何会话状态。
@@ -33,12 +44,14 @@
 
 ### 修改
 
+- 动态形象支持 `generated:<job-id>`，运行文件经 Android 原生鉴权代理加载；已生成模型按实际人物边界取景，待机口型不覆盖聊天口型。
 - 根目录 README 增加 Codex 项目交接文档入口。
 - `AiCompanion` 数据类新增 `live2dModel: String?`；`AiCompanionRow` 与 `serializeAiCompanion` 同步新增 `live2d_model` / `live2dModel`。
 - 聊天页"更多"菜单新增"选择动态形象"（未绑定时）/ "沉浸模式" + "更换动态形象"（已绑定时）两项。
 
 ### 修复
 
+- 制作端新增空输出目录与阶段事件，失败任务仅复用同一任务的输入检查点；旧租约不能覆盖或发布新任务结果。
 - 修复 Live2D 绑定的两个 Android 单元测试在本机 JVM 上失败（`ProtocolException: Invalid HTTP method: PATCH`）。原因是桌面 JDK 的 `HttpURLConnection` 用一个私有静态白名单校验请求方法，该白名单不含 `PATCH`；Android 的 `HttpURLConnection` 由 OkHttp 实现，可正常发送 `PATCH`。即客户端代码在真机上正确，只有本机测试 JVM 无法表达该方法。已新增测试专用辅助 `app/src/test/java/com/anyi/memorial/network/HttpMethods.kt`，通过反射把白名单中未使用的 `TRACE` 槽位替换为 `PATCH`（不改变数组长度和其他槽位），并在 `app/build.gradle.kts` 的 `testOptions` 为单元测试加上 `--add-opens java.base/java.net=ALL-UNNAMED`。生产代码与 `AnyiApiClient` 未做任何修改。此前 8 个 `PATCH` 调用点从未被单元测试用真实 socket 覆盖，所以该限制一直没有暴露。
 
 ### 移除
@@ -53,6 +66,8 @@
 
 ### 运维/部署
 
+- 新增默认关闭的 `LIVE2D_ENABLED` 与服务端 `LIVE2D_WORKER_TOKEN`；Mac 制作端使用 `ANYI_API_URL`、`ANYI_WORKER_TOKEN` 和独立供应商/SSH 配置，详情见接入文档。本次仅本地修改和验证，生产未部署。
+- 验证：后端 50 项、Android 16 项和制作端 15 项测试通过；Debug APK 构建成功。真实老爷爷产物通过私有上传、下载、绑定及 390×700 / 1200×800 WebGL 非空像素与运动检查。另一次全新图片任务在 Astra 阶段遭遇 Apexin 504，任务已正确回传失败状态；不将此轮记为全新生成成功。
 - 新增数据库迁移：MySQL `0012_ai_companion_live2d.sql`、SQLite `0030_ai_companion_live2d.sql`，为 `ai_companions` 增加可空列 `live2d_model`。为纯加列、可空、无默认值，不影响现有数据；服务启动时自动应用。回滚只需 `ALTER TABLE ai_companions DROP COLUMN live2d_model`，客户端对缺失字段按未绑定处理。
 - 本次不涉及环境变量或密钥变更。生产尚未部署，需先在本地完成 Android 构建与真机验收再发布。
 - 授权说明：6 个模型均受 Live2D《免费素材许可协议》v1.6 约束，"一般用户/小规模企业可用于任何营利或非营利目的"，Cubism Core 文件头标注为 Redistributable Code，当前个人使用合规。若未来年销售额达到 1000 万日元或以商业形式发行，需另行取得 Live2D 出版许可并复核形象授权，详见项目记忆 `anyi-live2d-licensing`。

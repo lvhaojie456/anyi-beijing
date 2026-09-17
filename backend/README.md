@@ -54,6 +54,8 @@
 
 ## 本地开发
 
+Live2D 生成队列、制作端安装与私有模型接口见 [Live2D 生成接入](../docs/live2d-generation.md)。服务端增加 `LIVE2D_ENABLED=false` 和 `LIVE2D_WORKER_TOKEN`，制作端主动领取任务；不会在 API 请求内执行 GPU 推理。
+
 ```powershell
 cd D:\Desktop\anyiapp2\backend
 npm ci

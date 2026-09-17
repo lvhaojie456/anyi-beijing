@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; media-src 'none'; object-src 'none'">
 <title>Live2D</title>
 <style>
   html, body { margin:0; padding:0; width:100%; height:100%; background:transparent; overflow:hidden; }
@@ -31,6 +32,8 @@
   let model = null;
   let talkTimer = null;
   let lipTarget = 0;
+  let loadSequence = 0;
+  let generatedBounds = null;
 
   function bridge(fn, arg) {
     try { if (window.AndroidBridge && window.AndroidBridge[fn]) window.AndroidBridge[fn](arg == null ? '' : String(arg)); } catch (e) {}
@@ -42,6 +45,14 @@
     const ph = app.renderer.height / app.renderer.resolution;
     const im = model.internalModel;
     const ow = im.originalWidth || im.width || 1, oh = im.originalHeight || im.height || 1;
+    if (generatedBounds) {
+      const [x1,y1,x2,y2] = generatedBounds;
+      const scale = Math.min(pw / (x2-x1), ph / (y2-y1)) * 0.91;
+      model.scale.set(scale);
+      model.anchor.set(0,0);
+      model.position.set(pw/2-(x1+x2)/2*scale, ph/2-(y1+y2)/2*scale);
+      return;
+    }
     const scale = Math.min(pw / ow, ph / oh) * 0.98;
     model.scale.set(scale);
     model.anchor.set(0.5, 0.42);
@@ -62,20 +73,48 @@
     setParam('ParamMouthOpenY', lipTarget);
   });
 
-  async function load(modelId) {
-    const id = String(modelId || '').replace(/[^a-z0-9_]/gi, '').toLowerCase();
+  async function load(modelId, generatedUrl) {
+    const id = String(modelId || '');
     if (!id) { bridge('onError', 'empty model id'); return; }
     const entry = MODEL_FILES[id];
-    if (!entry) { bridge('onError', 'unknown model ' + id); return; }
+    const generated = /^generated:[a-f0-9-]{36}$/.test(id);
+    const expected = location.origin + '/generated-live2d/' + id.slice(10) + '/runtime/model.model3.json';
+    if (!entry && !(generated && generatedUrl === expected)) { bridge('onError', 'unknown model'); return; }
+    const sequence = ++loadSequence;
     stopTalk();
     if (model) { app.stage.removeChild(model); model.destroy(); model = null; }
     try {
-      model = await PIXI.live2d.Live2DModel.from('models/' + id + '/' + entry, { autoInteract: true });
+      let bounds = null;
+      if (generated) {
+        const response = await fetch(generatedUrl);
+        if (!response.ok) throw new Error('model unavailable');
+        const document = await response.json();
+        const b = document.AnyiBounds;
+        if (Array.isArray(b) && b.length===4 && b.every(Number.isFinite) && b[2]>b[0] && b[3]>b[1]) bounds=b;
+      }
+      const next = await PIXI.live2d.Live2DModel.from(generated ? generatedUrl : 'models/' + id + '/' + entry, { autoInteract: true });
+      if (sequence !== loadSequence) { next.destroy(); return; }
+      model = next;
+      generatedBounds = bounds;
+      if (generated) {
+        const im = model.internalModel, core = im.coreModel;
+        const visible = [];
+        for (let i=0; i<core.getDrawableCount(); i++) {
+          if (core.getDrawableOpacity(i) <= 0) continue;
+          const b=im.getDrawableBounds(i);
+          if (b.width>0 && b.height>0) visible.push(b);
+        }
+        if (visible.length) generatedBounds=[
+          Math.min(...visible.map(b=>b.x)), Math.min(...visible.map(b=>b.y)),
+          Math.max(...visible.map(b=>b.x+b.width)), Math.max(...visible.map(b=>b.y+b.height))
+        ];
+      }
       app.stage.addChild(model);
       fit();
       try { model.motion('Idle'); } catch (e) {}
       bridge('onReady', id);
     } catch (e) {
+      if (sequence !== loadSequence) return;
       bridge('onError', String(e && e.message ? e.message : e));
     }
   }
