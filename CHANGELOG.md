@@ -58,6 +58,8 @@
 
 ### 修复
 
+- 制作端嘴部测量 `tools/live2d-worker/scripts/auto_expression.py` 的口腔暗区阈值由固定的灰度 145 改为按 145、120、100 依次回退，第一个不触及搜索框边界的结果生效，并在 recipe 的 `mouth.dark_threshold` 记录实际使用的阈值。此前写实风格图片里白胡须阴影和嘴周皮肤暗部都低于 145，与口腔连成一片撑满搜索框，触发 `Mouth measurement hit the search boundary` 自检，线上任务 `5462ebc4` 在精修阶段因此失败；插画风格图片在 145 即通过，输出与修改前逐字节一致。所有阈值都失败时仍抛出原错误。
+- 制作端 Astra 拆层规划 `tools/live2d-worker/live2d_pipeline.py` 在流式响应被对端中途关闭（`httpx.TransportError`，如 `peer closed connection without sending complete message body`）、连接失败或网关 5xx 时，按 `ASTRA_STREAM_RETRIES`（默认 1 次）重新发起同一请求，间隔 5 秒递增。OpenAI SDK 的 `max_retries` 只覆盖响应开始前的失败，流中断此前会直接让整个任务失败并浪费已生成的图片；`finish_reason` 不是 `stop` 的完整响应仍按原逻辑报错、不重试。
 - 制作端新增空输出目录与阶段事件，失败任务仅复用同一任务的输入检查点；旧租约不能覆盖或发布新任务结果。
 - 修复 Live2D 绑定的两个 Android 单元测试在本机 JVM 上失败（`ProtocolException: Invalid HTTP method: PATCH`）。原因是桌面 JDK 的 `HttpURLConnection` 用一个私有静态白名单校验请求方法，该白名单不含 `PATCH`；Android 的 `HttpURLConnection` 由 OkHttp 实现，可正常发送 `PATCH`。即客户端代码在真机上正确，只有本机测试 JVM 无法表达该方法。已新增测试专用辅助 `app/src/test/java/com/anyi/memorial/network/HttpMethods.kt`，通过反射把白名单中未使用的 `TRACE` 槽位替换为 `PATCH`（不改变数组长度和其他槽位），并在 `app/build.gradle.kts` 的 `testOptions` 为单元测试加上 `--add-opens java.base/java.net=ALL-UNNAMED`。生产代码与 `AnyiApiClient` 未做任何修改。此前 8 个 `PATCH` 调用点从未被单元测试用真实 socket 覆盖，所以该限制一直没有暴露。
 
@@ -89,6 +91,8 @@
 - 授权说明：6 个模型均受 Live2D《免费素材许可协议》v1.6 约束，"一般用户/小规模企业可用于任何营利或非营利目的"，Cubism Core 文件头标注为 Redistributable Code，当前个人使用合规。若未来年销售额达到 1000 万日元或以商业形式发行，需另行取得 Live2D 出版许可并复核形象授权，详见项目记忆 `anyi-live2d-licensing`。
 - 补充说明：本次仅删除鸿蒙端代码与资源。生产服务器上的 `open-llm-vtuber.service` 仍为 inactive/disabled 状态，nginx 对 `/vtuber`、`/live2d-models/`、`/tts-ws` 等的 404 拦截保持不变，本次未改动服务器。
 - 验证：本次清理后后端 `npm test` 50 项通过；Android `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest` 在本机 SDK（build-tools 36.1.0、JDK 21）通过，16 项单元测试全部通过；制作端 `unittest discover` 16 项通过。未构建 release 包，未部署。
+- 验证：制作端 `unittest discover` 21 项通过（新增 5 项）。用线上任务 `5462ebc4` 第二次尝试的真实产物在本机 dry-run（复用规划、拆层 PSD 与表情图，不调用供应商）：精修、绑定阶段通过，嘴部按阈值 120 测出；但校验阶段以 `feet max displacement=0.32 px`（阈值 0.25）失败。原因是 4090 See-through 把这张白底写实图的整个背景并入 `topwear` 图层（bbox 覆盖 213–1067 × 0–1280 整幅画布，约 101 万像素，正常应约 12 万），呼吸变形器因此固定到画布底部并带动脚部；该问题与本次修复无关，即使修复发布后重试此任务仍会在校验阶段失败，需要另行处理（重新生成非白底图片或在拆层后按前景轮廓裁掉背景）。
+- 制作端新增可选环境变量 `ASTRA_STREAM_RETRIES`（默认 1，`.env.example` 已补充），无需改动线上 `worker.env`。本次修复只涉及 Mac 制作端代码，线上 API、数据库与 Android 均无变化；生效需要在 Mac 上以合并后的提交发布新的 `releases/<sha>` 目录并切换 launchd，未经授权前不部署。
 
 ## 当前发布（2026-09-08）
 
