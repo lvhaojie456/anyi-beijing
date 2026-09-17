@@ -23,6 +23,28 @@
 
 ### 新增
 
+- 无。
+
+### 修改
+
+- 无。
+
+### 修复
+
+- 无。
+
+### 移除
+
+- 无。
+
+### 运维/部署
+
+- 无。
+
+## 当前发布（2026-09-18）
+
+### 新增
+
 - 新增 `docs/live2d-supervisor-plan.md`：Live2D 生成监督方案（规则恢复 + 大模型诊断与处置）。内容为三层架构、关卡与失败包、动作菜单与预算、前景遮罩与动作幅度回退等规则层能力、后端诊断字段与迁移 0014/0032 草案、App 文案与确认流程、隐私边界、测试验收与 PR 拆分。仅为方案文档，未改动任何代码。
 - 制作端新增规则恢复层 `tools/live2d-worker/scripts/foreground.py`：提示词生成默认请求透明背景（`IMAGE_BACKGROUND=transparent`，Apexin `gpt-image-2.5-sunburst` 实测 33 秒返回真 RGBA，供应商不支持时自动回落普通生成）；进拆层前 `neutralize_background` 把透明或近白（角落近白且与边框连通）背景填成中性灰 (210,210,210)，因为 See-through 会把纯白背景当作人物并入衣服图层，灰底则分得干净（同一张图灰底重拆实测 `topwear` 从占画布 79% 回到 10%）；拆层后 `clip_background` 按外接框占比 > 60%、逐层深度图饱和像素 > 30% 或遮罩外像素 > 30% 判定泄漏，只对泄漏图层按 `depth < 250 ∧ 遮罩` 重建并写出 `decomposition/input_clipped.psd`，其余图层逐字节不变；报告与遮罩写入 `foreground/`。
 - 制作端动作幅度回退：`motion_recipe(package, scale)` 支持整体缩小倾斜、呼吸、胸腔扩张、手臂与衣摆幅度；校验只因脚底位移 ≥ 0.25 px 或翻转三角形失败（顶点有限、无退化三角形）时按 1.0 → 0.66 → 0.33 重新绑定复检，最多两次，失败目录保留为 `body-motion.failed-scaleNNN`，`validation.json` 记录 `motionScale`。
@@ -33,6 +55,7 @@
 
 ### 修改
 
+- Android 版本提升为 `1.0.19`（versionCode 21），沿用 release-v2 签名；除版本号外与 `main` `16cfa9c` 无差异。
 - `tools/live2d-worker/scripts/auto_build.py` 的 `run()` 重构为带恢复动作的阶段流程：阶段名与进度值不变（后端阶段白名单未改），重跑阶段时旧目录改名保留；`--reuse-decomposition` 现同时复制同目录的 `input/` 深度图；新增 CLI 参数 `--background`、`--supervisor-state`；`edit_face` 新增 `strict` 提示；`regions()` 允许在拆层前调用。`01_input_white.png` 文件名保留作为制作端检查点标记，但其背景现为中性灰而不是白。
 - 制作端 `anyi_worker.py`：领取时读取 `retryHint`，`regenerate_image` 时放弃旧图片的全部检查点；构建子进程带 `--supervisor-state <任务目录>/supervisor-state.json`；上报失败时附带尝试目录 `supervisor/diagnosis.json` 里经白名单过滤的诊断；`validation.json` 增加 `motionScale`、`backgroundClipped`、`visualReview`。
 - 文档：`docs/live2d-generation.md` 新增"规则恢复与监督"一节并更新接口表；`docs/security-operations.md` 补充自动质检的图片范围与留存说明；`tools/live2d-worker/README.md` 与 `.env.example` 补充 `IMAGE_BACKGROUND`、`LIVE2D_SUPERVISOR_MODE`、`SUPERVISOR_MODEL`、`SUPERVISOR_REASONING_EFFORT`。
@@ -51,6 +74,7 @@
 - 数据库迁移 MySQL `0014_live2d_diagnosis.sql` / SQLite `0032_live2d_diagnosis.sql`：纯加列、可空、无默认值，服务启动时自动应用，不影响现有数据；回滚执行 `ALTER TABLE live2d_jobs DROP COLUMN diagnosis_code, DROP COLUMN suggestion, DROP COLUMN retry_hint, DROP COLUMN supervisor_summary`，客户端对缺失字段按无诊断处理。
 - 新环境变量都有默认值，线上 `worker.env` 与服务端 `.env` 无需改动：`IMAGE_BACKGROUND`（默认 transparent）、`LIVE2D_SUPERVISOR_MODE`（默认 shadow）、`SUPERVISOR_MODEL`（默认同 `ASTRA_MODEL`）、`SUPERVISOR_REASONING_EFFORT`（默认 low）。不涉及密钥变更。
 - 部署顺序：先部署后端（旧制作端发空请求体仍能标记失败），再在 Mac 发布新的 `releases/<sha>` 并切换 launchd；Android 改动需要随下一个 App 版本发布，本次未提升 versionCode。均需用户授权后执行。
+- 部署（2026-09-18 01:16–01:22 CST，用户授权）：线上后端由 `7f8938f` 切换到 `main` 的 `16cfa9c`，启动时自动应用迁移 `0014_live2d_diagnosis.sql`（`_node_migrations` 13 → 14 行，四个新列已验证）；部署前备份 `anyi-mysql-anyi_memorial-20260918-011620.sql.gz` / `anyi-uploads-20260918-011620.tar.gz`；服务器构建哈希 `c09e0744c7ed` 与本机一致；回滚副本 `/opt/anyi-releases/before-main-20260918-16cfa9c`、`dist-node.pre-main-20260918-16cfa9c`。Mac 制作端切换到 `releases/16cfa9c`（plist 备份 `.bak-7f8938f`），监督器按默认 `shadow` 运行。Android 1.0.19 已构建、签名验证与 1.0.18 同证书，APK SHA-256 `6ed6ae4e5a6f00bc8a40620e306c0f87ae7862303619a6874af0c44b87949528`，上传为 `anyi-memorial-1.0.19-release-v2.apk` 并切换 `anyi-memorial-latest.apk` / `anyi-memorial-release-latest.apk`，公网回读哈希一致；AAB 保留本地未上传。详见 `docs/releases/2026-09-18-supervisor-1.0.19.md`。
 - 验证：制作端 `unittest discover` 32 项通过（新增 11 项），后端 `npm test` 50 项通过，Android `:app:testDebugUnitTest` 19 项通过（新增 3 项）。用线上任务 `5462ebc4` 第二次尝试的产物回放新流程（复用规划、拆层 PSD 与表情图）：自动判定 `topwear` 泄漏并裁剪（1,014,498 → 146,729 像素，外接框 488,166–794,711，与同图灰底重拆结果一致），校验一次通过，脚底位移 0.0002 px，27 秒。影子模式再回放一次并真实调用 Astra：规划、拆层、收尾三次审查各 11.1 / 9.2 / 13.3 秒，规划关卡判定矩形正确，收尾评分 0.82 并列出闭眼与张嘴细节问题；预算文件正确记录 3 次调用；日志与审查记录中无密钥。
 
 ## 当前发布（2026-09-17）
