@@ -23,15 +23,19 @@
 
 ### 新增
 
-- 无。
+- 官网补回源码并改版。此前 `anyi-memorial-site.pages.dev`（Cloudflare Pages）上跑的那版比仓库里的 `website/` 更新，仓库那份仍停留在“人文社区 / 义工互助”的旧功能表述，两版内容不一致。本次以线上版本为基线还原进仓库，再按当前产品补齐：`index.html` 新增“动态形象与语音”功能卡与整节“语音陪伴”（音色选择、口型跟随、语音条留存、未绑定形象只回文字，并注明文案会发送至腾讯云语音合成），功能卡从 4 张扩到 6 张。新增 `website/_headers`（CSP、`X-Content-Type-Options`、`Referrer-Policy`、`Permissions-Policy` 与 `/assets/*` 一周缓存）与 `website/wrangler.toml`（Pages 项目 `anyi-memorial-site`），此前线上没有任何安全响应头与缓存策略。新增 `website/assets/ai-screen.png` 与 `favicon-256.png`。
+- `website/README.md` 重写：补全 Cloudflare Pages 与腾讯云 CVM 两个部署目标的发布命令、本地预览方式、页面结构，以及“改产品时容易忘的四处同步点”（功能卡文案、截图、下载二维码、客服邮箱）。
 
 ### 修改
 
-- 无。
+- 官网文案与真实产品对齐：首屏说明改为“公开测试版本，功能持续迭代中”；简介、下载段落删除“适合先用于测试、演示和小范围体验”“当前版本仍为测试包”等早期表述；截图段落不再声称“刚从本机模拟器运行的最新版 App 中截取”，并修正为四张图的实际数量；核心功能中“个人设置”一卡的“账号注销”保留、删除已过时的措辞。
+- `website/styles.css`：功能网格由 4 列改为 3 列以容纳 6 张卡，新增 `.voice` / `.voice-points` / `.voice-figure` / `.wave` 样式，波形动画遵循 `prefers-reduced-motion`；`980px` 与 `680px` 断点同步收纳新小节。
+- `website/assets/app-icon.png` 由 1254×1254 / 1,429 KB 压到 512×512 / 262 KB。该图在页面上仅用于 44px 的品牌图标和 favicon，原先占了整个站点体积的一半以上。`website/assets/profile-screen.png` 更新为线上版本（199 KB → 222 KB）。站点总体积由约 2.5 MB 降至 1.2 MB。
+- `.gitignore` 增加 `.wrangler/` 与 `.claude/`：分别是 wrangler 的本地缓存目录和本机工具配置，都不应进仓库。
 
 ### 修复
 
-- 无。
+- 官网四张手机截图的取图说明与实际情况不符，已修正；`robots.txt` 与 `sitemap.xml` 指向的 `https://anyi.anyibj.cn/` 当前**没有 DNS 记录**（解析为 NXDOMAIN），搜索引擎抓取会被拒。本次未改动这两处，待确认该域名是否继续作为官网入口后再定。
 
 ### 移除
 
@@ -39,7 +43,9 @@
 
 ### 运维/部署
 
-- 无。
+- 已在 Cloudflare Pages 生产环境发布（Deployment `eb85d692`，分支 `main`）：`https://anyi-memorial-site.pages.dev`。验证：`/`、`styles.css`、`robots.txt`、`sitemap.xml`、`_headers` 与全部 7 个静态资源均 200；`content-security-policy` 等安全头已在边缘生效，`/assets/app-screen.png` 返回 `cache-control: public, max-age=604800`。发布命令为 `cd website && npx wrangler@latest pages deploy . --project-name anyi-memorial-site --branch main`。
+- 腾讯云 CVM 上的 `/var/www/anyi-memorial-site/` 未同步本次改动，仍是 2026-08-30 的旧版；因 `anyi.anyibj.cn` 已无解析，`anyi-site` vhost 实际不可访问。是否保留该入口待定。
+- 本次未改动 App、后端与制作端，无需数据库迁移、无新增环境变量、无版本号变更。
 
 ## 当前发布（2026-09-18 16:00）
 

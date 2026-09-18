@@ -20,6 +20,8 @@ release-signing.properties
 *.p12
 
 # Build outputs and dependency directories
+.wrangler/
+.claude/
 build/
 captures/
 .externalNativeBuild/
