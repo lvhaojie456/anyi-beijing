@@ -22,20 +22,19 @@
 
 当前服务器实例主机名为 `VM-0-8-ubuntu`。腾讯云实例元数据可访问，服务器上运行有腾讯云 TAT/YunJing 管理组件。
 
-## 2. Windows SSH 登录
+## 2. SSH 登录
 
-当前部署密钥只保存在本机，不提交到 Git，也不要复制到聊天或文档中：
+当前部署密钥只保存在维护者本机的安全目录，不提交到 Git，也不要复制到聊天或文档中。下面用两个环境变量代指私钥与配套的 `known_hosts`，实际路径只记录在本机：
 
-```powershell
-$Key = 'D:\Desktop\anyiapp2\.codex_ssh\anyi_deploy_ed25519'
-$KnownHosts = 'D:\Desktop\anyiapp2\.codex_ssh\known_hosts'
+```bash
+export ANYI_SSH_KEY=/path/to/anyi_deploy_ed25519
+export ANYI_KNOWN_HOSTS=/path/to/known_hosts
 
-ssh `
-  -i $Key `
-  -o IdentitiesOnly=yes `
-  -o StrictHostKeyChecking=yes `
-  -o UserKnownHostsFile=$KnownHosts `
-  -o ConnectTimeout=15 `
+ssh -i "$ANYI_SSH_KEY" \
+  -o IdentitiesOnly=yes \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="$ANYI_KNOWN_HOSTS" \
+  -o ConnectTimeout=15 \
   ubuntu@api.anyibj.cn
 ```
 
@@ -57,23 +56,24 @@ SHA256:J6vRCONJEboxcI8wO6DyQsnR5sZRrI33OTO6AjWdc+E
 
 本地核对公钥指纹：
 
-```powershell
-ssh-keygen -lf D:\Desktop\anyiapp2\.codex_ssh\anyi_deploy_ed25519.pub
+```bash
+ssh-keygen -lf "$ANYI_SSH_KEY.pub"
 ```
 
 ## 3. 上传文件
 
 上传到服务器临时目录，再在服务器上用 `install` 或 `mv` 替换，避免直接覆盖正在使用的文件：
 
-```powershell
-scp `
-  -i D:\Desktop\anyiapp2\.codex_ssh\anyi_deploy_ed25519 `
-  -o IdentitiesOnly=yes `
-  -o StrictHostKeyChecking=yes `
-  -o UserKnownHostsFile=D:\Desktop\anyiapp2\.codex_ssh\known_hosts `
-  .\backend\dist-node\src\index.js `
+```bash
+scp -i "$ANYI_SSH_KEY" \
+  -o IdentitiesOnly=yes \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="$ANYI_KNOWN_HOSTS" \
+  backend/dist-node/src/index.js \
   ubuntu@api.anyibj.cn:/tmp/anyi-index.js
 ```
+
+以上是单文件热修的做法。常规发布不这么做：按 [交接文档](handover.md) 的“发布流程”整棵 `backend` 树在服务器上重建、比对哈希、留回滚副本后原子替换。
 
 服务器端安装示例：
 
@@ -91,11 +91,10 @@ curl -fsS http://127.0.0.1:8787/health
 
 完整后端发布前，在本地执行：
 
-```powershell
-cd D:\Desktop\anyiapp2\backend
-npm install
-npm run check
-npm run server:build
+```bash
+cd backend
+npm ci
+npm test
 ```
 
 生产服务器部署目录为 `/opt/anyiapp2/backend`。不要覆盖以下文件或目录：
@@ -179,13 +178,14 @@ sudo systemctl reload nginx
 sudo systemctl status nginx --no-pager
 ```
 
-当前还存在以下相关服务：
+当前还存在以下相关单元：
 
 ```text
-mysql.service
-nginx.service
-open-llm-vtuber.service
-anyi-mysql-backup.timer
+anyi-memorial-api.service   API（enabled）
+anyi-mysql-backup.timer     每日备份（enabled）
+certbot.timer               证书续期（enabled）
+mysql.service / nginx.service
+open-llm-vtuber.service     退役项目残留，disabled，单元文件与 anyi_proxy 账号待清理
 ```
 
 ## 6. SSH 安全状态
@@ -223,8 +223,8 @@ sudo systemctl reload ssh
 
 在本地生成密钥：
 
-```powershell
-ssh-keygen -t ed25519 -f $HOME\.ssh\anyi-maintainer-ed25519
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/anyi-maintainer-ed25519
 ```
 
 在服务器控制台中执行，把下面的占位内容替换为新维护者 `.pub` 文件的一整行：
@@ -239,10 +239,8 @@ sudo sshd -t
 
 然后从新电脑测试：
 
-```powershell
-ssh -i $HOME\.ssh\anyi-maintainer-ed25519 `
-  -o IdentitiesOnly=yes `
-  ubuntu@api.anyibj.cn
+```bash
+ssh -i ~/.ssh/anyi-maintainer-ed25519 -o IdentitiesOnly=yes ubuntu@api.anyibj.cn
 ```
 
 确认新密钥可用后，再按密钥所有权清理旧密钥；清理前必须确认没有其他维护者仍在使用旧密钥。
@@ -272,8 +270,8 @@ sudo sshd -t
 
 通常是用户名、密钥路径或权限不对：
 
-```powershell
-ssh -vvv -i $Key -o IdentitiesOnly=yes ubuntu@api.anyibj.cn
+```bash
+ssh -vvv -i "$ANYI_SSH_KEY" -o IdentitiesOnly=yes ubuntu@api.anyibj.cn
 ```
 
 检查：
@@ -292,10 +290,12 @@ ssh -vvv -i $Key -o IdentitiesOnly=yes ubuntu@api.anyibj.cn
 - 当前网络、VPN 或公司出口是否阻断 22 端口。
 - 域名是否解析到正确的 CVM。
 
-```powershell
-Resolve-DnsName api.anyibj.cn
-Test-NetConnection api.anyibj.cn -Port 22
+```bash
+dig +short api.anyibj.cn
+nc -vz api.anyibj.cn 22
 ```
+
+注意本机 DNS 可能被代理软件劫持成 `198.18.x.x` 一类假地址；拿权威结果用 `curl -s -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?name=api.anyibj.cn&type=A'`。
 
 ### `Connection refused`
 
@@ -315,8 +315,8 @@ sudo ss -lntp | grep ':22'
 
 使用：
 
-```powershell
-ssh -o IdentitiesOnly=yes -i $Key ubuntu@api.anyibj.cn
+```bash
+ssh -o IdentitiesOnly=yes -i "$ANYI_SSH_KEY" ubuntu@api.anyibj.cn
 ```
 
 ### `Connection closed`
@@ -372,7 +372,7 @@ sudo journalctl -u anyi-memorial-api -n 80 --no-pager
 
 并确认：
 
-- Nginx HTTPS 正常。
+- Nginx HTTPS 正常，且 `sudo nginx -T | grep -c internal/live2d` 不为 0（`sites-enabled/anyi-api` 必须是指向 `sites-available` 的软链，2026-09-19 核验时它是独立旧文件，制作端 256 MB 上传段落未生效）。
 - MySQL 迁移记录已更新。
 - 上传目录和 `.env` 没有被覆盖。
 - 人物、聊天和手动记忆账号隔离正常；自动整理新记忆默认关闭。
