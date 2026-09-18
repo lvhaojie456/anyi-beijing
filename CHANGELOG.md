@@ -35,6 +35,7 @@
 ### 修复
 
 - 后端 `ai_speech_usage` 每日用量的写入改为按数据库方言生成 SQL：MySQL 用 `ON DUPLICATE KEY UPDATE`，SQLite 用 `ON CONFLICT ... DO UPDATE`。PR #13 只写了 SQLite 语法，线上 MySQL 第一次合成就会因 SQL 错误回滚并删除刚生成的音频；本地测试跑在 SQLite 上没有暴露。部署前复查发现，未上线。
+- 后端 `server/server.ts` 把 `TTS_ENABLED`、`TENCENT_TTS_*`、`TTS_*` 加入传给应用的环境白名单。此前该文件按键名逐个转发 `process.env`，PR #13 新增的键没有列入，线上写了 `TTS_ENABLED=true` 后 `/app/config` 的 `speech.enabled` 仍为 false，语音合成接口返回 503；本地测试直接构造 env 对象所以没暴露。部署时发现。
 
 ### 移除
 
