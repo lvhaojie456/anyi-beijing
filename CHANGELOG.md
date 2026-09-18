@@ -1,25 +1,3 @@
-## 未发布
-
-### 新增
-
-- 无。
-
-### 修改
-
-- 无。
-
-### 修复
-
-- 无。
-
-### 移除
-
-- 无。
-
-### 运维/部署
-
-- 无。
-
 # 安忆更新日志
 
 本文件是安忆项目唯一的变更总账。凡是进入项目、测试环境或生产环境的变更，都必须在同一个 Pull Request 中记录：新增功能、行为修改、缺陷修复、配置和数据库迁移、文档和资源变更，以及删除或迁移的内容。
@@ -41,7 +19,7 @@
 - `移除`：删除或停止支持的内容。
 - `运维/部署`：数据库迁移、服务发布、下载包、回滚和验证。
 
-## 当前发布（2026-09-18 12:00）
+## 未发布
 
 ### 新增
 
@@ -53,8 +31,6 @@
 
 - `AiCompanion` 新增 `voiceId`；`Live2dAvatarView` 新增 `mouthOpenness` 参数，置空即回落到原来按文本长度估算的说话动画。
 - `backend/.env.server.example`、`docs/live2d-generation.md`、`backend/README.md` 补充 `TTS_*` / `TENCENT_TTS_*` 配置与计费、缓存、配额说明。
-- Android 版本提升为 `1.0.20`（versionCode 22），沿用 release-v2 签名；除版本号外与 `main` `d1611fa` 无差异。
-- 无。
 
 ### 修复
 
@@ -71,6 +47,28 @@
 - 隐私：合成音频含 AI 回复原文，作为私有资产只对该用户可读，账号注销与对象删除随现有资产删除队列清理，服务端缓存 30 天自动回收；`docs/security-operations.md` 已同步。
 - 计费与授权：腾讯云按合成字符计费，具体单价以官网定价页为准，本记录不写数字；音色均为腾讯云合成音色，不涉及真人声音克隆，个人自用无额外授权要求，商业发行前需复核。
 - 验证：后端 `npm test` 53 项通过（新增 3 项 TTS 用例）、Android `:app:testDebugUnitTest` 23 项通过（新增 4 项分句用例）、制作端 34 项通过。本次未部署；线上需开通语音合成并设置 `TTS_ENABLED=true` 才生效。
+
+## 当前发布（2026-09-18 12:00）
+
+### 新增
+
+- 无。
+
+### 修改
+
+- Android 版本提升为 `1.0.20`（versionCode 22），沿用 release-v2 签名；除版本号外与 `main` `d1611fa` 无差异。
+
+### 修复
+
+- 制作端修复合手/单手形象无法绑定的问题。See-through 对双手交握（或另一只手被遮挡）的图只给一个合并的 `handwear` 图层，而绑定要求 `arm-l`、`arm-r`、`hand-l`、`hand-r` 四个图层，此前 `make_recipe` 只在存在 `handwear-l` / `handwear-r` 时才生成手臂与手的分割，精修包因此缺少这四个图层，`build_body_motion` 以 `Incomplete or duplicate authoring layers` 失败。现在单个 `handwear` 会先按画布中线分成左右，再各自按原有手腕比例切出手和手臂，与腿部 `legwear` / `footwear` 的处理方式一致；拆层本就给出左右分层时行为不变。触发场景：提示词"一个真实的慈祥的老奶奶"生成双手交握的写实立绘，任务在绑定阶段失败。
+- 制作端监督器单次模型调用超时由 60 秒提到 90 秒（`SUPERVISOR_TIMEOUT_SECONDS` 可调），超时或返回非法 JSON 时再试一次，缩略图由 512 px 降到 384 px。此前一次真实运行中拆层关卡在 60.2 秒 `APITimeoutError`，该关卡等于没有执行。
+
+### 移除
+
+- 无。
+
+### 运维/部署
+
 - 部署（2026-09-18 11:58–12:05 CST，用户授权）：线上后端由 `16cfa9c` 切换到 `main` 的 `d1611fa`（无新迁移，`_node_migrations` 保持 14 行）；部署前备份 `anyi-mysql-anyi_memorial-20260918-115836.sql.gz` / `anyi-uploads-20260918-115836.tar.gz`；服务器构建哈希 `c09e0744c7ed` 与本机一致；回滚副本 `/opt/anyi-releases/before-main-20260918-d1611fa`、`dist-node.pre-main-20260918-d1611fa`。Mac 制作端切换到 `releases/d1611fa`（plist 备份 `.bak-16cfa9c`）。Android 1.0.20 已构建并发布：APK SHA-256 `5761c02788160951abe2ad6fd3fde2b30fef553b432322c294f8d655956e47cc`，证书与线上一致，`anyi-memorial-latest.apk` / `anyi-memorial-release-latest.apk` 已切换，公网回读哈希一致；AAB 保留本地未上传。详见 `docs/releases/2026-09-18-handwear-fix-1.0.20.md`。
 - 验证：制作端 `unittest discover` 34 项通过（新增 2 项：合并手层拆分、审查超时重试）。用失败任务的产物回放（复用规划、拆层 PSD 与表情）修复后一次通过，`arm-l`/`arm-r`/`hand-l`/`hand-r` 正常生成，脚底位移 0.0003 px；随后用同一提示词"一个真实的慈祥的老奶奶"做全新生成（影子模式，真实调用 Astra）也完整通过：生成立绘、规划、4090 拆层（无背景泄漏、未触发裁剪）、表情、精修 31 层、绑定与校验全部通过，脚底位移 0.0002 px，视觉评分 0.83，规划 / 拆层 / 表情三次审查分别 7.6 / 14.0 / 14.3 秒。
 
@@ -96,8 +94,6 @@
 
 ### 修复
 
-- 制作端修复合手/单手形象无法绑定的问题。See-through 对双手交握（或另一只手被遮挡）的图只给一个合并的 `handwear` 图层，而绑定要求 `arm-l`、`arm-r`、`hand-l`、`hand-r` 四个图层，此前 `make_recipe` 只在存在 `handwear-l` / `handwear-r` 时才生成手臂与手的分割，精修包因此缺少这四个图层，`build_body_motion` 以 `Incomplete or duplicate authoring layers` 失败。现在单个 `handwear` 会先按画布中线分成左右，再各自按原有手腕比例切出手和手臂，与腿部 `legwear` / `footwear` 的处理方式一致；拆层本就给出左右分层时行为不变。触发场景：提示词"一个真实的慈祥的老奶奶"生成双手交握的写实立绘，任务在绑定阶段失败。
-- 制作端监督器单次模型调用超时由 60 秒提到 90 秒（`SUPERVISOR_TIMEOUT_SECONDS` 可调），超时或返回非法 JSON 时再试一次，缩略图由 512 px 降到 384 px。此前一次真实运行中拆层关卡在 60.2 秒 `APITimeoutError`，该关卡等于没有执行。
 - 无。
 
 ### 移除
