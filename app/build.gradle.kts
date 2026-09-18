@@ -40,8 +40,8 @@ android {
         applicationId = "com.anyi.memorial"
         minSdk = 24
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.0.18"
+        versionCode = 21
+        versionName = "1.0.19"
         buildConfigField("String", "API_BASE_URL", buildConfigString(apiBaseUrl))
         buildConfigField("String", "API_BASE_URLS", buildConfigString(apiBaseUrls))
         buildConfigField("String", "WECHAT_APP_ID", buildConfigString(wechatAppId))
