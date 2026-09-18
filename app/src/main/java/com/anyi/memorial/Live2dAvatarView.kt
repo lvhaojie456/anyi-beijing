@@ -75,6 +75,7 @@ internal fun Live2dAvatarView(
     modelId: String,
     modifier: Modifier = Modifier,
     speakText: String? = null,
+    mouthOpenness: Float? = null,
     api: AnyiApiClient? = null,
     onEvent: (Live2dEvent) -> Unit = {}
 ) {
@@ -115,6 +116,14 @@ internal fun Live2dAvatarView(
         val jobId = generatedLive2dJobId(modelId)
         val modelUrl = jobId?.let { "$LIVE2D_ORIGIN/generated-live2d/$it/runtime/model.model3.json" }
         view.evaluateJavascript("window.anyiLive2d && window.anyiLive2d.load(${JSONObject.quote(modelId)}, ${modelUrl?.let(JSONObject::quote) ?: "null"})", null)
+    }
+
+    // Real audio drives the mouth while a synthesized reply is playing; the text
+    // animation stays as the fallback when there is no audio (or TTS is off).
+    LaunchedEffect(mouthOpenness) {
+        val view = webView ?: return@LaunchedEffect
+        if (loadedModel == null || mouthOpenness == null) return@LaunchedEffect
+        view.evaluateJavascript("window.anyiLive2d && window.anyiLive2d.setLipSync(" + mouthOpenness + ")", null)
     }
 
     // Trigger talk animation on each new reply.

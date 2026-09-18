@@ -135,6 +135,10 @@ Nginx 配置在：
 - [examples/tencent-nginx-node-api-http.conf](examples/tencent-nginx-node-api-http.conf)
 - [examples/tencent-nginx-node-api.conf](examples/tencent-nginx-node-api.conf)
 
+## 语音输出（TTS）
+
+`TTS_ENABLED` 默认关闭。开启后,绑定了动态形象的陪伴对象在 AI 回复时由客户端分句调用 `POST /ai/companions/:id/speech` 合成语音(腾讯云 `TextToVoice`,服务名 `tts`),音色只能是白名单里的 `uncle`/`aunt`/`gentle`,通过 `PATCH /ai/companions/:id/voice` 设置。密钥默认复用 `TENCENT_ASR_*`,可用 `TENCENT_TTS_SECRET_ID/KEY` 单独指定;`TENCENT_TTS_VOICE_DEFAULT` 决定未设置音色时的默认值。合成按字符计费,因此有 `TTS_DAILY_CHAR_LIMIT` 与 `TTS_CACHE_DAYS`(同句缓存、超期清理)。
+
 ## 数据备份
 
 生产主库在本机 MySQL，上传文件在 `/var/lib/anyi-memorial-api/uploads`。服务器使用 `anyi-mysql-backup.timer` 每天自动备份 MySQL dump 和 uploads，手动执行：

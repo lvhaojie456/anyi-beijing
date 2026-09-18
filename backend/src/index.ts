@@ -32,6 +32,16 @@ type Bindings = {
   TENCENT_ASR_REGION?: string;
   TENCENT_ASR_ENGINE_MODEL_TYPE?: string;
   TENCENT_ASR_ENDPOINT?: string;
+  TTS_ENABLED?: string;
+  TENCENT_TTS_SECRET_ID?: string;
+  TENCENT_TTS_SECRET_KEY?: string;
+  TENCENT_TTS_REGION?: string;
+  TENCENT_TTS_ENDPOINT?: string;
+  TENCENT_TTS_VOICE_DEFAULT?: string;
+  TENCENT_TTS_SAMPLE_RATE?: string;
+  TTS_TIMEOUT_MS?: string;
+  TTS_DAILY_CHAR_LIMIT?: string;
+  TTS_CACHE_DAYS?: string;
   AI_VOICE_RETAIN_AUDIO?: string;
   LIVE2D_ENABLED?: string;
   LIVE2D_WORKER_TOKEN?: string;
@@ -246,6 +256,7 @@ type AiCompanionRow = {
   chat_background_url?: string | null;
   live2d_model?: string | null;
   live2d_job_id?: string | null;
+  voice_id?: string | null;
   avatar_url: string | null;
   smile_avatar_url: string | null;
   avatar_motion_json: string;
@@ -671,6 +682,10 @@ app.get("/app/config", (c) =>
       voice: {
         enabled: readEnvBoolean(c.env.AI_VOICE_ENABLED, false),
         asrConfigured: aiVoiceAsrConfigured(c.env)
+      },
+      speech: {
+        enabled: speechEnabled(c.env),
+        voices: speechVoiceIds()
       }
     }
   })
@@ -2315,6 +2330,115 @@ app.post("/ai/companions/:id/messages", requireAuth, async (c) => {
     () => createAiChatPair(c, companion, content)
   );
   return c.json({ messages: messages.map(serializeAiMessage) }, 201);
+});
+
+// Tencent Cloud TTS for one utterance. Cached per user, voice and text so a
+// repeated sentence is never synthesized twice.
+app.post("/ai/companions/:id/speech", requireAuth, async (c) => {
+  if (!speechEnabled(c.env)) throw new ApiError(503, "tts_disabled");
+  const companion = await loadAiCompanionRow(c, c.req.param("id"));
+  const user = c.get("user");
+  const body = await parseJson(c);
+  const text = readString(body, "text", { required: true, max: ttsMaxChars }).trim();
+  if (!text) throw new ApiError(400, "tts_text_required");
+  const voice = resolvedSpeechVoice(c.env, body.voiceId ?? companion.voice_id);
+  const sampleRate = speechSampleRate(c.env);
+  const key = await speechCacheKey(user.id, voice.id, sampleRate, text);
+  const url = assetUrl(c, key);
+  const cached = await c.env.ASSETS.get(key);
+  if (cached) {
+    const existing = await c.env.DB.prepare("SELECT id FROM assets WHERE asset_key = ?").bind(key).first<{ id: string }>();
+    return new Response(cached.body, {
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Cache-Control": "private, max-age=86400",
+        "X-Anyi-Speech-Cache": "hit",
+        "X-Anyi-Speech-Key": key,
+        "X-Anyi-Speech-Asset": existing?.id || ""
+      }
+    });
+  }
+  const { day, used } = await speechDailyUsage(c, user.id);
+  const limit = speechDailyCharLimit(c.env);
+  if (used + text.length > limit) throw new ApiError(429, "tts_daily_limit", { limit, used });
+  const audio = await synthesizeTencentSpeech(c.env, text, voice.voiceType);
+  const now = new Date().toISOString();
+  const assetId = crypto.randomUUID();
+  await c.env.ASSETS.put(key, audio, {
+    httpMetadata: { contentType: "audio/mpeg" },
+    customMetadata: { ownerId: user.id }
+  });
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        "INSERT INTO assets (id, owner_id, asset_key, url, mime_type, size_bytes, visibility, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      ).bind(assetId, user.id, key, url, "audio/mpeg", audio.byteLength, "private", now),
+      c.env.DB.prepare(
+        `INSERT INTO ai_speech_usage (user_id, day, characters, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, day) DO UPDATE SET characters = characters + excluded.characters, updated_at = excluded.updated_at`
+      ).bind(user.id, day, text.length, now)
+    ]);
+  } catch (error) {
+    await c.env.ASSETS.delete(key);
+    await c.env.DB.prepare("DELETE FROM assets WHERE asset_key = ?").bind(key).run();
+    throw error;
+  }
+  await purgeSpeechCache(c, user.id).catch(() => {});
+  return new Response(audio, {
+    headers: {
+      "Content-Type": "audio/mpeg",
+      "Cache-Control": "private, max-age=86400",
+      "X-Anyi-Speech-Cache": "miss",
+      "X-Anyi-Speech-Key": key,
+      "X-Anyi-Speech-Asset": assetId
+    }
+  });
+});
+
+// The voice a companion speaks with. Only whitelisted ids are accepted; null clears it.
+app.patch("/ai/companions/:id/voice", requireAuth, async (c) => {
+  const companion = await loadAiCompanionRow(c, c.req.param("id"));
+  const user = c.get("user");
+  const body = await parseJson(c);
+  const raw = readString(body, "voiceId", { max: 32 });
+  const voiceId = raw ? raw.trim().toLowerCase() : null;
+  if (voiceId !== null && !speechVoice(voiceId)) {
+    throw new ApiError(400, "voice_not_supported", { allowed: speechVoices.map((voice) => voice.id) });
+  }
+  await c.env.DB.prepare(
+    "UPDATE ai_companions SET voice_id = ?, updated_at = ? WHERE id = ? AND user_id = ?"
+  ).bind(voiceId, new Date().toISOString(), companion.id, user.id).run();
+  return c.json({ companion: serializeAiCompanion(await loadAiCompanionRow(c, companion.id)) });
+});
+
+// Attach synthesized audio to an already saved reply so its bubble stays replayable.
+app.patch("/ai/companions/:id/messages/:messageId/audio", requireAuth, async (c) => {
+  const companion = await loadAiCompanionRow(c, c.req.param("id"));
+  const user = c.get("user");
+  const messageId = c.req.param("messageId");
+  const body = await parseJson(c);
+  const assetId = readString(body, "assetId", { required: true, max: 64 });
+  const durationMs = Number(body.durationMs ?? 0);
+  const row = await c.env.DB.prepare(
+    "SELECT id, sender FROM ai_chat_messages WHERE id = ? AND user_id = ? AND companion_id = ?"
+  ).bind(messageId, user.id, companion.id).first<{ id: string; sender: string }>();
+  if (!row) throw new ApiError(404, "message_not_found");
+  if (row.sender !== "ai") throw new ApiError(400, "message_not_repliable");
+  // Only this user's own synthesized speech can be attached.
+  const asset = await c.env.DB.prepare(
+    "SELECT id, asset_key, mime_type FROM assets WHERE id = ? AND owner_id = ?"
+  ).bind(assetId, user.id).first<{ id: string; asset_key: string; mime_type: string }>();
+  if (!asset || !asset.asset_key.startsWith(`${user.id}/ai/speech/`)) {
+    throw new ApiError(400, "message_audio_not_owned");
+  }
+  await c.env.DB.prepare(
+    "UPDATE ai_chat_messages SET message_type = 'voice', audio_url = ?, audio_asset_id = ?, audio_mime_type = ?, duration_ms = ? WHERE id = ? AND user_id = ?"
+  ).bind(assetUrl(c, asset.asset_key), asset.id, asset.mime_type || "audio/mpeg",
+    Number.isFinite(durationMs) && durationMs > 0 ? Math.round(durationMs) : null, messageId, user.id).run();
+  const updated = await c.env.DB.prepare(
+    "SELECT id, companion_id, sender, content, created_at, message_type, duration_ms, audio_mime_type, audio_url, audio_asset_id FROM ai_chat_messages WHERE id = ?"
+  ).bind(messageId).first<AiChatRow>();
+  return c.json({ message: updated ? serializeAiMessage(updated) : null });
 });
 
 app.post("/ai/companions/:id/voice-messages", requireAuth, async (c) => {
@@ -6301,6 +6425,7 @@ function serializeAiCompanion(row: AiCompanionRow) {
     relation: row.relation,
     chatBackgroundUrl: row.chat_background_url || null,
     live2dModel: row.live2d_job_id ? `generated:${row.live2d_job_id}` : row.live2d_model || null,
+    voiceId: speechVoice(row.voice_id) ? row.voice_id : null,
     avatarUrl: row.avatar_url,
     generated: Boolean(row.generated),
     latestMessage: row.latest_message || "",
@@ -6392,6 +6517,162 @@ const tencentAsrHost = "asr.tencentcloudapi.com";
 const tencentAsrAction = "SentenceRecognition";
 const tencentAsrVersion = "2019-06-14";
 const maxTencentAsrBase64Bytes = 3 * 1024 * 1024;
+
+// Tencent Cloud TTS (TextToVoice). The service name in the TC3 credential scope is "tts".
+const tencentTtsService = "tts";
+const tencentTtsHost = "tts.tencentcloudapi.com";
+const tencentTtsAction = "TextToVoice";
+const tencentTtsVersion = "2019-08-23";
+const ttsMaxChars = 150;          // the API rejects longer input: 中文最多 150 字
+// Whitelisted voices only: users pick a name, never a raw VoiceType.
+const speechVoices = [
+  { id: "uncle",    voiceType: 603006, label: "沉稳男声" },
+  { id: "aunt",     voiceType: 602005, label: "知性女声" },
+  { id: "gentle",   voiceType: 603004, label: "温柔女声" }
+];
+
+function speechVoiceIds() { return speechVoices.map((voice) => ({ id: voice.id, label: voice.label })); }
+
+function speechVoice(value: unknown) {
+  const id = typeof value === "string" ? value.trim() : "";
+  return speechVoices.find((voice) => voice.id === id) || null;
+}
+
+function defaultSpeechVoiceId(env: Bindings) {
+  return env.TENCENT_TTS_VOICE_DEFAULT?.trim() || "";
+}
+
+function resolvedSpeechVoice(env: Bindings, requested: unknown) {
+  return speechVoice(requested) || speechVoice(defaultSpeechVoiceId(env)) || speechVoices[0];
+}
+
+function speechSecret(env: Bindings) {
+  const secretId = env.TENCENT_TTS_SECRET_ID?.trim() || env.TENCENT_ASR_SECRET_ID?.trim();
+  const secretKey = env.TENCENT_TTS_SECRET_KEY?.trim() || env.TENCENT_ASR_SECRET_KEY?.trim();
+  return secretId && secretKey ? { secretId, secretKey } : null;
+}
+
+function speechEnabled(env: Bindings) {
+  return readEnvBoolean(env.TTS_ENABLED, false) && Boolean(speechSecret(env));
+}
+
+function normalizeTencentTtsEndpoint(value?: string) {
+  const raw = value?.trim() || `https://${tencentTtsHost}`;
+  const url = new URL(raw);
+  if (url.protocol !== "https:" || url.hostname !== tencentTtsHost || (url.pathname !== "/" && url.pathname !== "")) {
+    throw new ApiError(503, "tts_provider_not_configured", { field: "TENCENT_TTS_ENDPOINT" });
+  }
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function speechSampleRate(env: Bindings) {
+  const raw = Number(env.TENCENT_TTS_SAMPLE_RATE || 16000);
+  return [8000, 16000, 24000].includes(raw) ? raw : 16000;
+}
+
+function speechDailyCharLimit(env: Bindings) {
+  const raw = Number(env.TTS_DAILY_CHAR_LIMIT || 20000);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 20000;
+}
+
+function speechCacheSeconds(env: Bindings) {
+  const raw = Number(env.TTS_CACHE_DAYS || 30);
+  const days = Number.isFinite(raw) && raw >= 0 ? raw : 30;
+  return Math.floor(days * 24 * 60 * 60);
+}
+
+async function synthesizeTencentSpeech(env: Bindings, text: string, voiceType: number) {
+  const secret = speechSecret(env);
+  if (!secret) throw new ApiError(503, "tts_provider_not_configured", { required: ["TENCENT_TTS_SECRET_ID", "TENCENT_TTS_SECRET_KEY"] });
+  if (typeof text !== "string" || !text.trim()) throw new ApiError(400, "tts_text_required");
+  if (text.length > ttsMaxChars) throw new ApiError(413, "tts_text_too_long", { maxChars: ttsMaxChars });
+  const payload = JSON.stringify({
+    Text: text,
+    SessionId: crypto.randomUUID(),
+    VoiceType: voiceType,
+    Volume: 0,
+    Speed: 0,
+    ProjectId: 0,
+    ModelType: 1,
+    PrimaryLanguage: 1,
+    SampleRate: speechSampleRate(env),
+    Codec: "mp3"
+  });
+  const timestamp = Math.floor(Date.now() / 1000);
+  const authorization = await createTencentTc3Authorization(secret.secretId, secret.secretKey, timestamp, payload, {
+    service: tencentTtsService,
+    host: tencentTtsHost,
+    action: tencentTtsAction
+  });
+  const timeoutMs = boundedTimeout(env.TTS_TIMEOUT_MS, 30_000, 5_000, 120_000);
+  const endpoint = normalizeTencentTtsEndpoint(env.TENCENT_TTS_ENDPOINT);
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: authorization,
+        "Content-Type": "application/json; charset=utf-8",
+        "X-TC-Action": tencentTtsAction,
+        "X-TC-Timestamp": String(timestamp),
+        "X-TC-Version": tencentTtsVersion,
+        "X-TC-Region": env.TENCENT_TTS_REGION?.trim() || env.TENCENT_ASR_REGION?.trim() || "ap-beijing"
+      },
+      body: payload
+    }, timeoutMs);
+  } catch {
+    throw new ApiError(502, "tts_upstream_unreachable", { provider: "tencent" });
+  }
+  const raw = await response.text();
+  let body: unknown;
+  try { body = JSON.parse(raw); } catch { throw new ApiError(502, "tts_invalid_response", { provider: "tencent" }); }
+  const root = body && typeof body === "object" ? (body as Record<string, unknown>).Response : null;
+  const result = root && typeof root === "object" ? root as Record<string, unknown> : null;
+  const error = result?.Error && typeof result.Error === "object" ? result.Error as Record<string, unknown> : null;
+  if (!response.ok || error) {
+    const code = String(error?.Code || `http_${response.status}`);
+    if (/^(?:AuthFailure|UnauthorizedOperation|FailedOperation\.UserHasNoFreeAmount)/i.test(code)) {
+      throw new ApiError(503, "tts_provider_not_configured", { provider: "tencent", code });
+    }
+    throw new ApiError(502, "tts_upstream_failed", { provider: "tencent", code });
+  }
+  const audio = typeof result?.Audio === "string" ? result.Audio : "";
+  if (!audio) throw new ApiError(502, "tts_invalid_response", { provider: "tencent" });
+  return Buffer.from(audio, "base64");
+}
+
+async function speechCacheKey(userId: string, voiceId: string, sampleRate: number, text: string) {
+  return `${userId}/ai/speech/${voiceId}-${sampleRate}-${await sha256Hex(text)}.mp3`;
+}
+
+/** Delete cached speech that is not linked to a saved message and is older than the retention window. */
+async function purgeSpeechCache(c: Context<AppEnv>, userId: string) {
+  const days = speechCacheSeconds(c.env);
+  if (!days) return;
+  const cutoff = new Date(Date.now() - days * 1000).toISOString();
+  const stale = await c.env.DB.prepare(
+    "SELECT asset_key FROM assets WHERE owner_id = ? AND asset_key LIKE ? AND created_at < ? LIMIT 200"
+  ).bind(userId, `${userId}/ai/speech/%`, cutoff).all<{ asset_key: string }>();
+  for (const row of stale.results) {
+    const linked = await c.env.DB.prepare(
+      "SELECT 1 AS linked FROM ai_chat_messages WHERE audio_url = ? LIMIT 1"
+    ).bind(assetUrl(c, row.asset_key)).first<{ linked: number }>();
+    if (linked) continue;
+    await c.env.ASSETS.delete(row.asset_key);
+    await c.env.DB.prepare("DELETE FROM assets WHERE asset_key = ?").bind(row.asset_key).run();
+  }
+}
+
+async function speechDailyUsage(c: Context<AppEnv>, userId: string) {
+  const day = new Date().toISOString().slice(0, 10);
+  const row = await c.env.DB.prepare(
+    "SELECT characters FROM ai_speech_usage WHERE user_id = ? AND day = ?"
+  ).bind(userId, day).first<{ characters: number }>();
+  return { day, used: Number(row?.characters || 0) };
+}
 
 async function transcribeTencentAiVoice(env: Bindings, file: File) {
   const secretId = env.TENCENT_ASR_SECRET_ID?.trim();
@@ -6502,13 +6783,18 @@ async function createTencentTc3Authorization(
   secretId: string,
   secretKey: string,
   timestamp: number,
-  payload: string
+  payload: string,
+  scope: { service: string; host: string; action: string } = {
+    service: tencentAsrService,
+    host: tencentAsrHost,
+    action: tencentAsrAction
+  }
 ) {
   const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
   const canonicalHeaders =
     "content-type:application/json; charset=utf-8\n" +
-    `host:${tencentAsrHost}\n` +
-    `x-tc-action:${tencentAsrAction.toLowerCase()}\n`;
+    `host:${scope.host}\n` +
+    `x-tc-action:${scope.action.toLowerCase()}\n`;
   const signedHeaders = "content-type;host;x-tc-action";
   const canonicalRequest = [
     "POST",
@@ -6518,7 +6804,7 @@ async function createTencentTc3Authorization(
     signedHeaders,
     await sha256Hex(payload)
   ].join("\n");
-  const credentialScope = `${date}/${tencentAsrService}/tc3_request`;
+  const credentialScope = `${date}/${scope.service}/tc3_request`;
   const stringToSign = [
     "TC3-HMAC-SHA256",
     String(timestamp),
@@ -6526,7 +6812,7 @@ async function createTencentTc3Authorization(
     await sha256Hex(canonicalRequest)
   ].join("\n");
   const secretDate = await hmacSha256Bytes(encoder.encode(`TC3${secretKey}`), date);
-  const secretService = await hmacSha256Bytes(secretDate, tencentAsrService);
+  const secretService = await hmacSha256Bytes(secretDate, scope.service);
   const secretSigning = await hmacSha256Bytes(secretService, "tc3_request");
   const signature = bytesToHex(await hmacSha256Bytes(secretSigning, stringToSign));
   return `TC3-HMAC-SHA256 Credential=${secretId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;

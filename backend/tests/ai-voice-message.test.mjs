@@ -417,3 +417,121 @@ test("Tencent ASR reports missing credentials without exposing values", async ()
   assert.equal(payload.ai.voice.asrConfigured, false);
   assert.equal(JSON.stringify(payload).includes("Secret"), false);
 });
+
+test("speech synthesis is disabled by default and lists whitelisted voices", async () => {
+  const response = await app.fetch(new Request("https://api.anyibj.cn/app/config"), {
+    DB: { dialect: "sqlite", prepare() { throw new Error("not used"); }, batch() {}, hasColumn() {} },
+    ASSETS: {}, AUTH_SECRET: authSecret, RATE_LIMIT_ENABLED: "false"
+  });
+  const payload = await response.json();
+  assert.equal(payload.ai.speech.enabled, false);
+  assert.deepEqual(payload.ai.speech.voices.map((voice) => voice.id), ["uncle", "aunt", "gentle"]);
+  assert.equal(JSON.stringify(payload).includes("603006"), false);
+});
+
+test("Tencent TTS signs, caches by text and enforces the daily character limit", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "anyi-tencent-tts-"));
+  const rawDatabase = openSqliteDatabase(path.join(root, "anyi.sqlite"));
+  migrateSqlite(rawDatabase, path.resolve("migrations"));
+  const stored = new Map();
+  const env = {
+    DB: new SqliteDatabaseAdapter(rawDatabase),
+    ASSETS: {
+      async put(key, value) { stored.set(key, Buffer.from(value)); },
+      async get(key) { const value = stored.get(key); return value ? { body: value, httpMetadata: { contentType: "audio/mpeg" } } : null; },
+      async delete(key) { stored.delete(key); }
+    },
+    AUTH_SECRET: authSecret,
+    RATE_LIMIT_ENABLED: "false",
+    TTS_ENABLED: "true",
+    TENCENT_ASR_SECRET_ID: "AKIDEXAMPLE",
+    TENCENT_ASR_SECRET_KEY: "example-secret-key",
+    TENCENT_ASR_REGION: "ap-beijing",
+    TTS_DAILY_CHAR_LIMIT: "20"
+  };
+  async function request(pathname, options = {}, token = "") {
+    const headers = new Headers(options.headers || {});
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
+    const response = await app.fetch(new Request(`https://api.anyibj.cn${pathname}`, { ...options, headers }), env);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const isJson = response.headers.get("Content-Type")?.includes("json");
+    return { response, data: isJson ? JSON.parse(buffer.toString("utf8")) : buffer };
+  }
+  async function register(name) {
+    const form = new FormData();
+    for (const [key, value] of Object.entries({ username: name, password: "TencentTts2026", displayName: name, gender: "女", acceptedTerms: "true", acceptedPrivacy: "true" })) form.append(key, value);
+    form.append("file", new Blob([png], { type: "image/png" }), "profile.png");
+    const result = await request("/auth/register", { method: "POST", body: form });
+    assert.equal(result.response.status, 201, JSON.stringify(result.data));
+    return result.data;
+  }
+
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url === "https://tts.tencentcloudapi.com/") {
+      calls.push({ headers: new Headers(init.headers), body: JSON.parse(String(init.body)) });
+      return Response.json({ Response: { Audio: Buffer.from("ID3fake-mp3").toString("base64"), RequestId: "req" } });
+    }
+    throw new Error(`unexpected upstream ${url}`);
+  };
+  try {
+    const owner = await register("tts_owner");
+    const created = await request("/ai/companions", { method: "POST", body: JSON.stringify({ displayName: "奶奶", relation: "奶奶" }) }, owner.token);
+    const companionId = created.data.companion.id;
+    assert.equal(created.data.companion.voiceId, null);
+    // Without an explicit voice the companion's own voice applies, else the whitelisted default.
+    const byDefault = await request(`/ai/companions/${companionId}/speech`, { method: "POST", body: JSON.stringify({ text: "你好" }) }, owner.token);
+    assert.equal(byDefault.response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].body.VoiceType, 603006);
+    const first = await request(`/ai/companions/${companionId}/speech`, { method: "POST", body: JSON.stringify({ text: "今天天气真好", voiceId: "uncle" }) }, owner.token);
+    assert.equal(first.response.status, 200);
+    assert.equal(first.response.headers.get("Content-Type"), "audio/mpeg");
+    assert.equal(first.response.headers.get("X-Anyi-Speech-Cache"), "miss");
+    assert.equal(first.data.toString(), "ID3fake-mp3");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].headers.get("X-TC-Action"), "TextToVoice");
+    assert.equal(calls[1].headers.get("X-TC-Version"), "2019-08-23");
+    assert.equal(calls[1].headers.get("X-TC-Region"), "ap-beijing");
+    assert.match(calls[1].headers.get("Authorization"), /^TC3-HMAC-SHA256 Credential=AKIDEXAMPLE\//);
+    assert.match(calls[1].headers.get("Authorization"), /\/tts\/tc3_request/);
+    assert.equal(calls[1].body.VoiceType, 603006);
+    assert.equal(calls[1].body.Codec, "mp3");
+    assert.equal(calls[1].body.SampleRate, 16000);
+    assert.equal(calls[1].body.PrimaryLanguage, 1);
+    assert.equal(typeof calls[1].body.SessionId, "string");
+    const again = await request(`/ai/companions/${companionId}/speech`, { method: "POST", body: JSON.stringify({ text: "今天天气真好", voiceId: "uncle" }) }, owner.token);
+    assert.equal(again.response.headers.get("X-Anyi-Speech-Cache"), "hit");
+    assert.equal(calls.length, 2, "a cached sentence must not call the provider twice");
+    // The daily limit counts characters of new synthesis only.
+    const used = rawDatabase.prepare("SELECT characters FROM ai_speech_usage WHERE user_id = (SELECT id FROM users WHERE username = ?)").get("tts_owner").characters;
+    assert.equal(used, 8);
+    const other = await request(`/ai/companions/${companionId}/speech`, { method: "POST", body: JSON.stringify({ text: "这是一句很长的话用来触发上限", voiceId: "aunt" }) }, owner.token);
+    assert.equal(other.response.status, 429);
+    assert.equal(other.data.error, "tts_daily_limit");
+    // Voice selection is whitelisted and stored on the companion.
+    assert.equal((await request(`/ai/companions/${companionId}/voice`, { method: "PATCH", body: JSON.stringify({ voiceId: "made-up" }) }, owner.token)).response.status, 400);
+    const patched = await request(`/ai/companions/${companionId}/voice`, { method: "PATCH", body: JSON.stringify({ voiceId: "gentle" }) }, owner.token);
+    assert.equal(patched.data.companion.voiceId, "gentle");
+    assert.equal((await request(`/ai/companions/${companionId}`, {}, owner.token)).data.companion.voiceId, "gentle");
+    assert.equal((await request(`/ai/companions/${companionId}/voice`, { method: "PATCH", body: JSON.stringify({ voiceId: null }) }, owner.token)).data.companion.voiceId, null);
+    assert.equal(JSON.stringify(patched.data).includes("603004"), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    rawDatabase.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("speech reports TTS as unconfigured when the toggle is on but no secret exists", async () => {
+  const response = await app.fetch(new Request("https://api.anyibj.cn/app/config"), {
+    DB: { dialect: "sqlite", prepare() { throw new Error("not used"); }, batch() {}, hasColumn() {} },
+    ASSETS: {}, AUTH_SECRET: authSecret, RATE_LIMIT_ENABLED: "false", TTS_ENABLED: "true"
+  });
+  const payload = await response.json();
+  assert.equal(payload.ai.speech.enabled, false);
+  assert.equal(JSON.stringify(payload).toLowerCase().includes("secret"), false);
+});
