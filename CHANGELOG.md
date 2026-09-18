@@ -23,12 +23,35 @@
 
 ### 新增
 
+- 无。
+
+### 修改
+
+- 无。
+
+### 修复
+
+- 无。
+
+### 移除
+
+- 无。
+
+### 运维/部署
+
+- 无。
+
+## 当前发布（2026-09-18 16:00）
+
+### 新增
+
 - 后端新增语音合成接口 `POST /ai/companions/:id/speech`：腾讯云 `TextToVoice`（TC3 v3 签名，服务名 `tts`，`Codec=mp3`、`SampleRate=16000`，文本上限 150 字），按 `用户 + 音色 + 采样率 + 文本` 的哈希缓存为私有资产，命中直接返回 `X-Anyi-Speech-Cache: hit` 且不计费。新增 `PATCH /ai/companions/:id/voice` 与 `voiceId` 字段（MySQL `0015` / SQLite `0033`，含 `ai_speech_usage` 每日用量表），每日合成字符上限 `TTS_DAILY_CHAR_LIMIT`（默认 20000），缓存保留 `TTS_CACHE_DAYS`（默认 30 天）并在下一次合成时回收未被消息引用的音频。腾讯云签名函数改为接受 `service/host/action`，ASR 行为与签名结果不变。
 - 后端新增 `PATCH /ai/companions/:id/messages/:messageId/audio`：首句播完后把合成音频挂到该条回复（`message_type=voice`、`audio_url`、`duration_ms`），只能挂本人 `ai/speech/` 下的资产，语音条因此可以回放。
 - Android 新增 `AiSpeechQueue.kt`：把回复按标点分句（首句 ≤ 40 字优先出声、其余 ≤ 120 字、超长硬切、尾句过短并入前句），逐句请求合成、边播边预取下一句，用 `MediaPlayer` 顺序播放；播放期间以播放包络驱动 `setLipSync(0..1)`，形象口型随语音开合、停顿闭嘴。新增音色选择入口（"更多"菜单里仅在绑定形象后出现的"说话声音"），白名单三项：沉稳男声、知性女声、温柔女声，另有"跟随默认"。未绑定形象或未选音色时完全不合成，与旧行为一致；合成失败只提示一次，文字回复不受影响。
 
 ### 修改
 
+- Android 版本提升为 `1.0.21`（versionCode 23），沿用 release-v2 签名；在 `0013d31` 之上构建，`fc04951` 仅改服务端文件、不影响安装包。
 - `AiCompanion` 新增 `voiceId`；`Live2dAvatarView` 新增 `mouthOpenness` 参数，置空即回落到原来按文本长度估算的说话动画。
 - `backend/.env.server.example`、`docs/live2d-generation.md`、`backend/README.md` 补充 `TTS_*` / `TENCENT_TTS_*` 配置与计费、缓存、配额说明。
 
@@ -43,6 +66,8 @@
 
 ### 运维/部署
 
+- 部署（2026-09-18 15:39–15:56 CST，用户授权）：腾讯云已开通语音合成并领取"超自然大模型音色免费资源包"（2 万字符、3 个月，覆盖三个白名单音色）。线上后端由 `d1611fa` 依次切换到 `0013d31`（迁移 `0015` 自动应用，`_node_migrations` 14 → 15 行）与 `fc04951`；备份 `anyi-mysql-anyi_memorial-20260918-153926.sql.gz` / `anyi-uploads-20260918-153926.tar.gz`；服务器构建哈希 `b123ed7edd3f` / `21ee21ce3c25` 与本机一致；`.env` 追加 `TTS_ENABLED=true`、`TENCENT_TTS_VOICE_DEFAULT=uncle`，密钥复用 `TENCENT_ASR_*`；回滚副本 `before-main-20260918-{0013d31,fc04951}` 与对应 `dist-node.pre-*`。Mac 制作端代码无变化，未切换。Android 1.0.21 已构建发布：APK SHA-256 `059ad5423ce63a5a702147ac1f40e3e35fde6afda29094cf5f411d893f593e61`，证书与线上一致，两个 latest 链接已切换并公网回读一致。
+- 线上端到端验收（临时账号，验收后 `DELETE /me` 清理）：`/app/config` 返回 `speech.enabled=true` 与三个音色；建对象默认 `voiceId=null`；`PATCH /voice` 设为 `gentle` 成功、非法 id 400；`POST /speech` 首次 `X-Anyi-Speech-Cache: miss` 返回 `audio/mpeg`（8,742 字节，16 kHz 单声道 mp3），同句再合成 `hit` 且字节完全一致；发文字消息得到 AI 回复后 `PATCH /messages/:id/audio` 使其变为 `voice`，`audioUrl` 带鉴权可回放、未登录 401。三个音色在部署前各真实合成一次（约 12–13 KB、3.1 秒）均成功。详见 `docs/releases/2026-09-18-voice-replies-1.0.21.md`。
 - 新增环境变量：`TTS_ENABLED`（默认 false）、`TENCENT_TTS_SECRET_ID/KEY`（默认复用 `TENCENT_ASR_*`）、`TENCENT_TTS_REGION`、`TENCENT_TTS_ENDPOINT`、`TENCENT_TTS_VOICE_DEFAULT`（默认 `uncle`）、`TENCENT_TTS_SAMPLE_RATE`、`TTS_TIMEOUT_MS`、`TTS_DAILY_CHAR_LIMIT`、`TTS_CACHE_DAYS`。不开启则不产生任何合成调用与费用。
 - 迁移 MySQL `0015_ai_companion_voice.sql` / SQLite `0033_ai_companion_voice.sql`：`ai_companions` 加可空列 `voice_id`，新建 `ai_speech_usage`。回滚 `DROP COLUMN voice_id` 与 `DROP TABLE ai_speech_usage` 即可。
 - 隐私：合成音频含 AI 回复原文，作为私有资产只对该用户可读，账号注销与对象删除随现有资产删除队列清理，服务端缓存 30 天自动回收；`docs/security-operations.md` 已同步。
