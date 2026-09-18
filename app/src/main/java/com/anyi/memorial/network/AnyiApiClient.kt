@@ -129,6 +129,49 @@ class AnyiApiClient(
 
     fun live2dConfig(): JSONObject = request("GET", "/ai/live2d/config", authorized = true)
 
+    /** MP3 bytes plus the stored asset id, so the reply bubble can keep its audio. */
+    data class SynthesizedSpeech(val bytes: ByteArray, val assetId: String)
+
+    fun synthesizeSpeech(companionId: String, text: String, voiceId: String?): SynthesizedSpeech {
+        require(companionId.matches(Regex("[a-f0-9-]{36}"))) { "ai_companion_invalid_id" }
+        require(text.isNotBlank() && text.length <= 150) { "speech_text_invalid" }
+        val body = JSONObject().put("text", text)
+        if (voiceId != null) body.put("voiceId", voiceId)
+        val connection = openConnection(baseUrls.first(), "/ai/companions/$companionId/speech", "POST", true)
+        connection.instanceFollowRedirects = false
+        connection.readTimeout = 60_000
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            if (connection.responseCode != 200) { parseResponse(connection); throw IOException("speech_unavailable") }
+            val bytes = connection.inputStream.use { it.readBytes() }
+            require(bytes.isNotEmpty() && bytes.size <= 8 * 1024 * 1024) { "speech_too_large" }
+            return SynthesizedSpeech(bytes, connection.getHeaderField("X-Anyi-Speech-Asset") ?: "")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun updateAiCompanionVoice(companionId: String, voiceId: String?): JSONObject {
+        return request(
+            method = "PATCH",
+            path = "/ai/companions/$companionId/voice",
+            authorized = true,
+            body = JSONObject().put("voiceId", voiceId ?: JSONObject.NULL)
+        )
+    }
+
+    /** Mark a saved AI message as a voice bubble backed by its synthesized audio. */
+    fun attachAiMessageAudio(companionId: String, messageId: String, assetId: String, durationMs: Long): JSONObject {
+        return request(
+            method = "PATCH",
+            path = "/ai/companions/$companionId/messages/$messageId/audio",
+            authorized = true,
+            body = JSONObject().put("assetId", assetId).put("durationMs", durationMs)
+        )
+    }
+
     fun listLive2dJobs(companionId: String): JSONArray =
         request("GET", "/ai/companions/$companionId/live2d/jobs", authorized = true).getJSONArray("jobs")
 

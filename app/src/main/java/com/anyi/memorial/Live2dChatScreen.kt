@@ -34,7 +34,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -69,7 +72,23 @@ internal fun Live2dChatScreen(
     onChangeAvatar: () -> Unit
 ) {
     val listState = rememberLazyListState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     var avatarError by remember(modelId) { mutableStateOf("") }
+    var mouthOpenness by remember(companion.id) { mutableStateOf<Float?>(null) }
+    val speech = remember(companion.id) {
+        AiSpeechQueue(
+            cacheDir = java.io.File(context.cacheDir, "speech"),
+            scope = scope,
+            onPlayingChanged = { playing -> if (!playing) mouthOpenness = null },
+            onLipsync = { openness ->
+                // MediaPlayer exposes no amplitude, so the mouth follows an envelope while audible.
+                mouthOpenness = if (openness <= 0f) null else openness
+            },
+            onError = { message -> avatarError = message }
+        )
+    }
+    DisposableEffect(companion.id) { onDispose { speech.stop() } }
 
     // Talk animation is triggered by the newest AI reply. Track its id so a
     // recomposition with the same list does not replay the animation.
@@ -80,6 +99,7 @@ internal fun Live2dChatScreen(
         if (latest.sender == "ai" && !latest.pending && latest.id != lastSpokenId) {
             lastSpokenId = latest.id
             speakText = latest.content
+            speakReply(api, companion, latest, speech, scope) { message -> avatarError = message }
         }
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
@@ -105,6 +125,7 @@ internal fun Live2dChatScreen(
                     modelId = modelId,
                     modifier = Modifier.fillMaxSize(),
                     speakText = speakText,
+                    mouthOpenness = mouthOpenness,
                     onEvent = { event ->
                         when (event) {
                             is Live2dEvent.Error -> avatarError = event.message

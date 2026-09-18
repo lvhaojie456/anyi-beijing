@@ -44,6 +44,16 @@ Mac 制作端（tools/live2d-worker）
 
 内部接口必须携带 `Authorization: Bearer <LIVE2D_WORKER_TOKEN>`；领取后的操作还需 `X-Live2d-Lease`。租约 120 秒、15 秒续约、最多 3 次自动领取。前端显示真实阶段进度而非预计完成时间。每用户每日新建最多 10 项任务，源图最多 8 MB，单个运行资产最多 32 MB、精修 ZIP 最多 240 MB，总产物最多 350 MB。
 
+## 语音与口型
+
+陪伴对象绑定了动态形象时,AI 回复会在显示文字的同时合成语音:客户端按标点分句(首句 ≤ 40 字以便尽快出声,其余 ≤ 120 字),逐句调用 `POST /ai/companions/:id/speech`,边播边预取下一句;播放期间 Android 侧按播放包络驱动 WebView 的 `setLipSync(0..1)`,停顿闭嘴。没有绑定形象或 `voiceId` 为空时完全不合成,行为和以前一致。
+
+- 音色白名单: `uncle` 沉稳男声(603006)、`aunt` 知性女声(602005)、`gentle` 温柔女声(603004)。客户端只提交 id,服务端映射到 VoiceType,不接受任意音色。
+- 合成结果按 `用户 + 音色 + 采样率 + 文本` 哈希缓存为私有资产;同句不重复计费,缓存 30 天(`TTS_CACHE_DAYS`)后由下一次合成时的清理任务回收,被消息引用过的音频不删。
+- 每用户每日合成字符上限 `TTS_DAILY_CHAR_LIMIT`(默认 20000),超过只回文字。
+- 首句播完后客户端把音频资产挂到该条回复上(`PATCH /ai/companions/:id/messages/:messageId/audio`),语音条可以回放;只接受本人 `ai/speech/` 下的资产。
+- 麦克风的语音输入(ASR)与这里的语音输出(TTS)互相独立,共用同一对腾讯云密钥,可分别用 `TENCENT_TTS_*` 覆盖。
+
 ## 规则恢复与监督
 
 2026-09-18 起制作端按 `docs/live2d-supervisor-plan.md` 的三层结构处理失败。
