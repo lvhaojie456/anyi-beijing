@@ -67,6 +67,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -142,12 +143,51 @@ internal data class AiCompanion(
     val relation: String,
     val chatBackgroundUrl: String?,
     val live2dModel: String?,
+    val voiceId: String? = null,
     val avatarUrl: String?,
     val generated: Boolean,
     val updatedAt: Long,
     val latestMessage: String,
     val latestMessageAt: Long?
 )
+
+/**
+ * Speaks one AI reply: split into sentences, synthesize each through the backend and
+ * play them in order. Failures never block the text bubble; they only clear the voice.
+ */
+internal fun speakReply(
+    api: com.anyi.memorial.network.AnyiApiClient,
+    companion: AiCompanion,
+    message: AiConversationMessage,
+    speech: AiSpeechQueue,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onError: (String) -> Unit
+) {
+    // Voice replies only exist for companions that show a live2d model and have a voice.
+    val voiceId = companion.voiceId ?: return
+    if (companion.live2dModel == null) return
+    if (message.messageType == "voice" && !message.audioUrl.isNullOrBlank()) return
+    val sentences = splitSpeechSentences(message.content)
+    if (sentences.isEmpty()) return
+    var firstAssetId: String? = null
+    scope.launch {
+        speech.play(message.id, sentences) { sentence ->
+            val synthesized = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                api.synthesizeSpeech(companion.id, sentence, voiceId)
+            }
+            if (firstAssetId == null) firstAssetId = synthesized.assetId
+            synthesized.bytes
+        }
+        // Keep the first utterance as the replayable bubble once playback finished.
+        firstAssetId?.takeIf { it.isNotBlank() }?.let { assetId ->
+            runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    api.attachAiMessageAudio(companion.id, message.id, assetId, 0L)
+                }
+            }.onFailure { onError("语音没有保存，可以重新播放文字") }
+        }
+    }
+}
 
 internal data class AiConversationMessage(
     val id: String,
@@ -378,6 +418,8 @@ internal fun AiCompanionScreen(
     var showLive2dPicker by remember { mutableStateOf(false) }
     var live2dStudioTarget by remember { mutableStateOf<AiCompanion?>(null) }
     var live2dSaving by remember { mutableStateOf(false) }
+    var voiceSaving by remember { mutableStateOf(false) }
+    var voicePicker by remember { mutableStateOf<AiCompanion?>(null) }
     val selected = selectedId?.let { id -> companions.firstOrNull { it.id == id } }
 
     fun conversationState(companionId: String): AiConversationState {
@@ -690,6 +732,24 @@ internal fun AiCompanionScreen(
         }
     }
 
+    fun updateVoice(companion: AiCompanion, voiceId: String?, onDone: () -> Unit = {}) {
+        if (voiceSaving) return
+        voiceSaving = true
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { api.updateAiCompanionVoice(companion.id, voiceId) }
+            }.onSuccess { response ->
+                replaceCompanion(parseCompanion(response.optJSONObject("companion") ?: response))
+                onDone()
+            }.onFailure { failure ->
+                updateConversationState(companion.id) { state ->
+                    state.copy(error = failure.companionError("语音设置失败"))
+                }
+            }
+            voiceSaving = false
+        }
+    }
+
     fun updateChatBackground(companion: AiCompanion, backgroundUrl: String?) {
         if (chatBackgroundSaving) return
         chatBackgroundSaving = true
@@ -837,7 +897,8 @@ internal fun AiCompanionScreen(
                 onChooseBackground = { chatBackgroundPicker.launch("image/*") },
                 onClearBackground = { selected?.let { updateChatBackground(it, null) } },
                 onImmersive = { immersive = true },
-                onPickLive2d = { showLive2dPicker = true }
+                onPickLive2d = { showLive2dPicker = true },
+                onPickVoice = { voicePicker = it }
             )
             }
         }
@@ -852,6 +913,15 @@ internal fun AiCompanionScreen(
             onPick = { modelId ->
                 updateLive2dModel(selected, modelId) { showLive2dPicker = false; if (modelId != null) immersive = true }
             }
+        )
+    }
+
+    voicePicker?.let { target ->
+        VoicePickerDialog(
+            current = target.voiceId,
+            saving = voiceSaving,
+            onDismiss = { if (!voiceSaving) voicePicker = null },
+            onPick = { voiceId -> updateVoice(target, voiceId) { voicePicker = null } }
         )
     }
 
@@ -999,7 +1069,8 @@ private fun CompanionChat(
     onEdit: () -> Unit,
     onStudio: () -> Unit,
     backgroundSaving: Boolean, onChooseBackground: () -> Unit, onClearBackground: () -> Unit,
-    onImmersive: () -> Unit = {}, onPickLive2d: () -> Unit = {}
+    onImmersive: () -> Unit = {}, onPickLive2d: () -> Unit = {},
+    onPickVoice: (AiCompanion) -> Unit = {}
 ) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
@@ -1133,6 +1204,13 @@ private fun CompanionChat(
                                     text = { Text("更换动态形象") },
                                     leadingIcon = { Icon(Icons.Rounded.Edit, null) },
                                     onClick = { showMore = false; onPickLive2d() }
+                                )
+                            }
+                            if (companion.live2dModel != null) {
+                                DropdownMenuItem(
+                                    text = { Text("说话声音") },
+                                    leadingIcon = { Icon(Icons.Rounded.VolumeUp, null) },
+                                    onClick = { showMore = false; onPickVoice(companion) }
                                 )
                             }
                             DropdownMenuItem(
@@ -1850,6 +1928,7 @@ private fun parseCompanion(item: JSONObject) = AiCompanion(
     relation = item.optString("relation"),
     chatBackgroundUrl = item.optString("chatBackgroundUrl").takeIf { it.isNotBlank() && it != "null" },
     live2dModel = item.optString("live2dModel").takeIf { it.isNotBlank() && it != "null" },
+    voiceId = item.optString("voiceId").takeIf { it.isNotBlank() && it != "null" },
     avatarUrl = item.optString("avatarUrl").takeIf { it.isNotBlank() && it != "null" },
     generated = item.optBoolean("generated", false),
     updatedAt = item.optLong("updatedAt").takeIf { it > 0L } ?: System.currentTimeMillis(),
@@ -1982,6 +2061,38 @@ private fun Throwable.companionError(fallback: String): String {
         detail.isBlank() -> fallback
         else -> "$fallback：$detail"
     }
+}
+
+/** Whitelisted voice choices; "跟随默认" clears the companion's own voice. */
+@Composable
+private fun VoicePickerDialog(current: String?, saving: Boolean, onDismiss: () -> Unit, onPick: (String?) -> Unit) {
+    val voices = listOf("uncle" to "沉稳男声", "aunt" to "知性女声", "gentle" to "温柔女声")
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("说话声音") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("形象说话时使用的声音。选择后 AI 回复会在显示文字的同时合成一条语音。", fontSize = 13.sp, color = Color(0xFF65756D))
+                voices.forEach { (id, label) ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable(enabled = !saving) { onPick(id) }.padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = current == id, onClick = { onPick(id) }, enabled = !saving)
+                        Text(label, fontSize = 15.sp)
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().clickable(enabled = !saving) { onPick(null) }.padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(selected = current == null, onClick = { onPick(null) }, enabled = !saving)
+                    Text("跟随默认（暂不发声）", fontSize = 15.sp)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text("完成") } }
+    )
 }
 
 /**

@@ -23,16 +23,18 @@
 
 ### 新增
 
-- 无。
+- 后端新增语音合成接口 `POST /ai/companions/:id/speech`：腾讯云 `TextToVoice`（TC3 v3 签名，服务名 `tts`，`Codec=mp3`、`SampleRate=16000`，文本上限 150 字），按 `用户 + 音色 + 采样率 + 文本` 的哈希缓存为私有资产，命中直接返回 `X-Anyi-Speech-Cache: hit` 且不计费。新增 `PATCH /ai/companions/:id/voice` 与 `voiceId` 字段（MySQL `0015` / SQLite `0033`，含 `ai_speech_usage` 每日用量表），每日合成字符上限 `TTS_DAILY_CHAR_LIMIT`（默认 20000），缓存保留 `TTS_CACHE_DAYS`（默认 30 天）并在下一次合成时回收未被消息引用的音频。腾讯云签名函数改为接受 `service/host/action`，ASR 行为与签名结果不变。
+- 后端新增 `PATCH /ai/companions/:id/messages/:messageId/audio`：首句播完后把合成音频挂到该条回复（`message_type=voice`、`audio_url`、`duration_ms`），只能挂本人 `ai/speech/` 下的资产，语音条因此可以回放。
+- Android 新增 `AiSpeechQueue.kt`：把回复按标点分句（首句 ≤ 40 字优先出声、其余 ≤ 120 字、超长硬切、尾句过短并入前句），逐句请求合成、边播边预取下一句，用 `MediaPlayer` 顺序播放；播放期间以播放包络驱动 `setLipSync(0..1)`，形象口型随语音开合、停顿闭嘴。新增音色选择入口（"更多"菜单里仅在绑定形象后出现的"说话声音"），白名单三项：沉稳男声、知性女声、温柔女声，另有"跟随默认"。未绑定形象或未选音色时完全不合成，与旧行为一致；合成失败只提示一次，文字回复不受影响。
 
 ### 修改
 
-- 无。
+- `AiCompanion` 新增 `voiceId`；`Live2dAvatarView` 新增 `mouthOpenness` 参数，置空即回落到原来按文本长度估算的说话动画。
+- `backend/.env.server.example`、`docs/live2d-generation.md`、`backend/README.md` 补充 `TTS_*` / `TENCENT_TTS_*` 配置与计费、缓存、配额说明。
 
 ### 修复
 
-- 制作端修复合手/单手形象无法绑定的问题。See-through 对双手交握（或另一只手被遮挡）的图只给一个合并的 `handwear` 图层，而绑定要求 `arm-l`、`arm-r`、`hand-l`、`hand-r` 四个图层，此前 `make_recipe` 只在存在 `handwear-l` / `handwear-r` 时才生成手臂与手的分割，精修包因此缺少这四个图层，`build_body_motion` 以 `Incomplete or duplicate authoring layers` 失败。现在单个 `handwear` 会先按画布中线分成左右，再各自按原有手腕比例切出手和手臂，与腿部 `legwear` / `footwear` 的处理方式一致；拆层本就给出左右分层时行为不变。触发场景：提示词"一个真实的慈祥的老奶奶"生成双手交握的写实立绘，任务在绑定阶段失败。
-- 制作端监督器单次模型调用超时由 60 秒提到 90 秒（`SUPERVISOR_TIMEOUT_SECONDS` 可调），超时或返回非法 JSON 时再试一次，缩略图由 512 px 降到 384 px。此前一次真实运行中拆层关卡在 60.2 秒 `APITimeoutError`，该关卡等于没有执行。
+- 无。
 
 ### 移除
 
@@ -40,6 +42,11 @@
 
 ### 运维/部署
 
+- 新增环境变量：`TTS_ENABLED`（默认 false）、`TENCENT_TTS_SECRET_ID/KEY`（默认复用 `TENCENT_ASR_*`）、`TENCENT_TTS_REGION`、`TENCENT_TTS_ENDPOINT`、`TENCENT_TTS_VOICE_DEFAULT`（默认 `uncle`）、`TENCENT_TTS_SAMPLE_RATE`、`TTS_TIMEOUT_MS`、`TTS_DAILY_CHAR_LIMIT`、`TTS_CACHE_DAYS`。不开启则不产生任何合成调用与费用。
+- 迁移 MySQL `0015_ai_companion_voice.sql` / SQLite `0033_ai_companion_voice.sql`：`ai_companions` 加可空列 `voice_id`，新建 `ai_speech_usage`。回滚 `DROP COLUMN voice_id` 与 `DROP TABLE ai_speech_usage` 即可。
+- 隐私：合成音频含 AI 回复原文，作为私有资产只对该用户可读，账号注销与对象删除随现有资产删除队列清理，服务端缓存 30 天自动回收；`docs/security-operations.md` 已同步。
+- 计费与授权：腾讯云按合成字符计费，具体单价以官网定价页为准，本记录不写数字；音色均为腾讯云合成音色，不涉及真人声音克隆，个人自用无额外授权要求，商业发行前需复核。
+- 验证：后端 `npm test` 53 项通过（新增 3 项 TTS 用例）、Android `:app:testDebugUnitTest` 23 项通过（新增 4 项分句用例）、制作端 34 项通过。本次未部署；线上需开通语音合成并设置 `TTS_ENABLED=true` 才生效。
 - 验证：制作端 `unittest discover` 34 项通过（新增 2 项：合并手层拆分、审查超时重试）。用失败任务的产物回放（复用规划、拆层 PSD 与表情）修复后一次通过，`arm-l`/`arm-r`/`hand-l`/`hand-r` 正常生成，脚底位移 0.0003 px；随后用同一提示词"一个真实的慈祥的老奶奶"做全新生成（影子模式，真实调用 Astra）也完整通过：生成立绘、规划、4090 拆层（无背景泄漏、未触发裁剪）、表情、精修 31 层、绑定与校验全部通过，脚底位移 0.0002 px，视觉评分 0.83，规划 / 拆层 / 表情三次审查分别 7.6 / 14.0 / 14.3 秒。
 
 ## 当前发布（2026-09-18）
@@ -64,6 +71,8 @@
 
 ### 修复
 
+- 制作端修复合手/单手形象无法绑定的问题。See-through 对双手交握（或另一只手被遮挡）的图只给一个合并的 `handwear` 图层，而绑定要求 `arm-l`、`arm-r`、`hand-l`、`hand-r` 四个图层，此前 `make_recipe` 只在存在 `handwear-l` / `handwear-r` 时才生成手臂与手的分割，精修包因此缺少这四个图层，`build_body_motion` 以 `Incomplete or duplicate authoring layers` 失败。现在单个 `handwear` 会先按画布中线分成左右，再各自按原有手腕比例切出手和手臂，与腿部 `legwear` / `footwear` 的处理方式一致；拆层本就给出左右分层时行为不变。触发场景：提示词"一个真实的慈祥的老奶奶"生成双手交握的写实立绘，任务在绑定阶段失败。
+- 制作端监督器单次模型调用超时由 60 秒提到 90 秒（`SUPERVISOR_TIMEOUT_SECONDS` 可调），超时或返回非法 JSON 时再试一次，缩略图由 512 px 降到 384 px。此前一次真实运行中拆层关卡在 60.2 秒 `APITimeoutError`，该关卡等于没有执行。
 - 无。
 
 ### 移除

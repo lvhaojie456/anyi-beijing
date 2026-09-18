@@ -567,7 +567,7 @@ test("application config only exposes the supported AI voice capability", async 
   }), testEnv({ TRUST_PROXY: "true" }));
   assert.equal(response.status, 200);
   const payload = await response.json();
-  assert.deepEqual(payload.ai, { voice: { enabled: false, asrConfigured: false } });
+  assert.deepEqual(payload.ai, { voice: { enabled: false, asrConfigured: false }, speech: { enabled: false, voices: [{ id: "uncle", label: "沉稳男声" }, { id: "aunt", label: "知性女声" }, { id: "gentle", label: "温柔女声" }] } });
   assert.equal("digitalHuman" in payload, false);
 });
 
@@ -765,7 +765,7 @@ test("AI provider calls fail clearly when the server key is missing", async () =
 
   const config = await app.fetch(new Request("https://api.anyibj.cn/app/config"), testEnv());
   const payload = await config.json();
-  assert.deepEqual(payload.ai, { voice: { enabled: false, asrConfigured: false } });
+  assert.deepEqual(payload.ai, { voice: { enabled: false, asrConfigured: false }, speech: { enabled: false, voices: [{ id: "uncle", label: "沉稳男声" }, { id: "aunt", label: "知性女声" }, { id: "gentle", label: "温柔女声" }] } });
   assert.equal("digitalHuman" in payload, false);
 });
 
