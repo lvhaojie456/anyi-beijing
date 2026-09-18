@@ -34,7 +34,7 @@
 
 ### 修复
 
-- 无。
+- 后端 `ai_speech_usage` 每日用量的写入改为按数据库方言生成 SQL：MySQL 用 `ON DUPLICATE KEY UPDATE`，SQLite 用 `ON CONFLICT ... DO UPDATE`。PR #13 只写了 SQLite 语法，线上 MySQL 第一次合成就会因 SQL 错误回滚并删除刚生成的音频；本地测试跑在 SQLite 上没有暴露。部署前复查发现，未上线。
 
 ### 移除
 

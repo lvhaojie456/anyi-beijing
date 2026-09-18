@@ -2373,10 +2373,7 @@ app.post("/ai/companions/:id/speech", requireAuth, async (c) => {
       c.env.DB.prepare(
         "INSERT INTO assets (id, owner_id, asset_key, url, mime_type, size_bytes, visibility, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       ).bind(assetId, user.id, key, url, "audio/mpeg", audio.byteLength, "private", now),
-      c.env.DB.prepare(
-        `INSERT INTO ai_speech_usage (user_id, day, characters, updated_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id, day) DO UPDATE SET characters = characters + excluded.characters, updated_at = excluded.updated_at`
-      ).bind(user.id, day, text.length, now)
+      c.env.DB.prepare(speechUsageUpsertSql(c.env.DB.dialect)).bind(user.id, day, text.length, now)
     ]);
   } catch (error) {
     await c.env.ASSETS.delete(key);
@@ -6664,6 +6661,15 @@ async function purgeSpeechCache(c: Context<AppEnv>, userId: string) {
     await c.env.ASSETS.delete(row.asset_key);
     await c.env.DB.prepare("DELETE FROM assets WHERE asset_key = ?").bind(row.asset_key).run();
   }
+}
+
+function speechUsageUpsertSql(dialect: string) {
+  if (dialect === "mysql") {
+    return `INSERT INTO ai_speech_usage (user_id, day, characters, updated_at) VALUES (?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE characters = characters + VALUES(characters), updated_at = VALUES(updated_at)`;
+  }
+  return `INSERT INTO ai_speech_usage (user_id, day, characters, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, day) DO UPDATE SET characters = characters + excluded.characters, updated_at = excluded.updated_at`;
 }
 
 async function speechDailyUsage(c: Context<AppEnv>, userId: string) {
