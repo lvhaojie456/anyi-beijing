@@ -21,7 +21,7 @@ sudo install -d -o ubuntu -g ubuntu -m 700 /var/lib/anyi-memorial-api
 sudo install -d -o ubuntu -g ubuntu -m 700 /var/lib/anyi-memorial-api/uploads
 ```
 
-把本地 `D:\Desktop\anyiapp2` 上传到服务器 `/opt/anyiapp2`。
+首次部署时把仓库的 `backend/` 上传到服务器 `/opt/anyiapp2/backend`（用 `git archive <sha> backend | gzip` 打包再 scp，不要把 `.env`、`node_modules`、`dist-node` 或个人文件一起传）。日常发布不再整目录覆盖，按 [交接文档](../docs/handover.md) 的“发布流程”做暂存、哈希比对、回滚副本与原子替换。
 
 ## 2. 安装 Node 和依赖
 
@@ -143,9 +143,10 @@ journalctl -u anyi-memorial-api -f
 
 ```bash
 sudo mkdir -p /var/www/anyi-downloads
-sudo cp /opt/anyiapp2/AnyiMemorial-test-v1.0.7-code9-image-upload-fix-20260528-210844.apk /var/www/anyi-downloads/anyi-memorial-latest.apk
-sudo chown -R www-data:www-data /var/www/anyi-downloads
+sudo chown www-data:www-data /var/www/anyi-downloads
 ```
+
+安装包按版本号命名放进去（`sudo install -o www-data -g www-data -m 644`），`anyi-memorial-latest.apk` 与 `anyi-memorial-release-latest.apk` 是指向当前版本的软链，用 `sudo ln -sfn` 切换。
 
 HTTP 配置只负责跳转到 HTTPS；证书准备好后再对外提供服务：
 
@@ -169,14 +170,17 @@ sudo systemctl reload nginx
 curl https://api.anyibj.cn/health
 ```
 
+`sites-enabled/anyi-api` 必须是指向 `sites-available/anyi-api` 的软链。如果它是一个独立文件，更新 `sites-available` 不会生效；用 `sudo nginx -T | grep internal/live2d` 确认制作端的 256 MB 上传段落真的在生效配置里。
+
 ## 7. 打包 App
 
 后端健康检查通过后，使用腾讯云域名构建 App：
 
-```powershell
-$env:JAVA_HOME='D:\0\android studio\jbr'
-.\gradlew.bat :app:assembleDebug -PANYI_API_BASE_URL=https://api.anyibj.cn
+```bash
+./gradlew :app:assembleDebug -PANYI_API_BASE_URL=https://api.anyibj.cn
 ```
+
+正式包的签名与上传步骤见 [交接文档](../docs/handover.md)。
 
 ## 8. 备份
 

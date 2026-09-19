@@ -40,6 +40,7 @@ screenshots/
 window-current.xml
 __pycache__/
 temp_generated_assets/
+dist/
 resume_render/
 *.sqlite
 *.db

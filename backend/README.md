@@ -50,19 +50,33 @@
 - `GET /admin/asset-delete-queue`、`POST /admin/asset-delete-queue/process`：本地文件删除队列
 - `GET /admin/crash-reports`：崩溃日志
 - `GET /admin/account-deletion-requests`、`PATCH /admin/account-deletion-requests/:id`：账号注销申请
-- `GET /app/config`：App 运行配置与微信、支付配置
+- `GET /app/config`：App 运行配置（微信、支付、AI 与语音合成音色列表）
+
+语音输出、动态形象与法律页面：
+
+- `POST /ai/companions/:id/speech`：把一段文字（≤ 150 字）合成为 mp3；同句按 `用户 + 音色 + 采样率 + 文本` 哈希缓存，响应头 `X-Anyi-Speech-Cache: hit|miss`
+- `PATCH /ai/companions/:id/voice`：设置对象音色，只接受白名单 `uncle` / `aunt` / `gentle`
+- `PATCH /ai/companions/:id/messages/:messageId/audio`：把本人 `ai/speech/` 下的音频挂到该条 AI 回复，消息变为可回放语音条
+- `PATCH /ai/companions/:id/live2d`：绑定或解绑动态形象（内置或生成产物）
+- `GET /ai/live2d/config`、`POST/GET /ai/companions/:id/live2d/jobs`、`GET /ai/live2d/jobs/:id`、`POST /ai/live2d/jobs/:id/{cancel,retry,activate}`、`GET /ai/live2d/jobs/:id/files/*`：Live2D 生成任务，见 [Live2D 生成接入](../docs/live2d-generation.md)
+- `POST /internal/live2d/jobs/claim`、`POST /internal/live2d/jobs/:id/{heartbeat,artifacts,complete,fail}`、`GET /internal/live2d/jobs/:id/input`：制作端内部接口，需 `Authorization: Bearer <LIVE2D_WORKER_TOKEN>`
+- `GET /legal/privacy`、`/legal/terms`、`/legal/ai-disclaimer`、`/legal/account-deletion`、`POST /legal/account-deletion/request`：法律页面与注销申请表单
+- `DELETE /community/posts/:id`、`DELETE /community/posts/:postId/comments/:commentId`：删除本人动态与评论
+- `GET/POST /feature-unlocks/:feature`：付费功能解锁占位，App 已不再调用，接口保留
 
 ## 本地开发
 
 Live2D 生成队列、制作端安装与私有模型接口见 [Live2D 生成接入](../docs/live2d-generation.md)。服务端增加 `LIVE2D_ENABLED=false` 和 `LIVE2D_WORKER_TOKEN`，制作端主动领取任务；不会在 API 请求内执行 GPU 推理。
 
-```powershell
-cd D:\Desktop\anyiapp2\backend
+```bash
+cd backend
 npm ci
-Copy-Item .env.server.example .env
+cp .env.server.example .env
 npm run server:build
 npm run server:start
 ```
+
+本机 Node 不是 20 时，`better-sqlite3` 的预编译二进制会对不上，先 `npm rebuild better-sqlite3`。`npm test` 全部跑在 SQLite 上，MySQL 专有 SQL 必须走 `dialect === "mysql"` 分支（参考 `rateLimitUpsertSql`、`speechUsageUpsertSql`），否则只有上线才会暴露。
 
 `.env` 至少需要修改：
 
@@ -75,7 +89,7 @@ MYSQL_PORT=3306
 MYSQL_USER=anyi_api
 MYSQL_PASSWORD=replace-with-mysql-password
 MYSQL_DATABASE=anyi_memorial
-ANYI_DATA_DIR=D:\Desktop\anyiapp2\backend\data
+ANYI_DATA_DIR=./data
 PUBLIC_ASSET_BASE_URL=https://api.anyibj.cn
 ALLOWED_ORIGINS=https://api.anyibj.cn
 PAYMENT_ENABLED=false
@@ -134,6 +148,10 @@ Nginx 配置在：
 
 - [examples/tencent-nginx-node-api-http.conf](examples/tencent-nginx-node-api-http.conf)
 - [examples/tencent-nginx-node-api.conf](examples/tencent-nginx-node-api.conf)
+
+## 新增环境变量时
+
+`server/server.ts` 按键名白名单把 `process.env` 转给应用。新增任何 `Bindings` 键都要同时加进那个白名单，否则 `.env` 写了线上也读不到（2026-09-18 `TTS_ENABLED` 就是这样漏掉的）。同时更新 `.env.server.example` 与本文。
 
 ## 语音输出（TTS）
 
