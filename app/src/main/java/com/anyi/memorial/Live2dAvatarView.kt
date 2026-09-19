@@ -31,6 +31,9 @@ internal fun generatedLive2dJobId(modelId: String?): String? = modelId
 internal fun supportedLive2dModel(modelId: String?): Boolean =
     Live2dCatalog.find(modelId) != null || generatedLive2dJobId(modelId) != null
 
+/** The single on-device store for generated models. App-private; survives app restarts, cleared on logout. */
+internal fun Context.live2dModelCache(): Live2dModelCache = Live2dModelCache(java.io.File(filesDir, "live2d"))
+
 /**
  * Catalogue of Live2D avatars bundled in the APK under assets/live2d/models/<id>/.
  * Ids must match the backend allow-list in backend/src/index.ts (live2dModelIds)
@@ -145,6 +148,7 @@ private const val LIVE2D_PATH = "/assets/live2d/"
 
 @SuppressLint("SetJavaScriptEnabled")
 private fun createLive2dWebView(context: Context, jobId: String?, api: AnyiApiClient?, emit: (Live2dEvent) -> Unit): WebView {
+    val cache = context.live2dModelCache()
     val assetLoader = WebViewAssetLoader.Builder()
         .setDomain("appassets.androidplatform.net")
         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
@@ -195,13 +199,16 @@ private fun createLive2dWebView(context: Context, jobId: String?, api: AnyiApiCl
                 val name = path.removePrefix(prefix)
                 if (!name.startsWith("runtime/")) return denied()
                 return try {
-                    val bytes = api.readLive2dFile(jobId, name)
+                    // Local first; a miss downloads the file, verifies its hash and keeps it for next time.
+                    val file = cache.read(jobId, name)
+                        ?: kotlinx.coroutines.runBlocking { cache.fetch(api, jobId, name) }
                     val mime = when {
                         name.endsWith(".json") -> "application/json"
                         name.endsWith(".png") -> "image/png"
                         else -> "application/octet-stream"
                     }
-                    WebResourceResponse(mime, null, 200, "OK", mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(bytes))
+                    // The WebView itself must not cache: files are served from our verified store only.
+                    WebResourceResponse(mime, null, 200, "OK", mapOf("Cache-Control" to "no-store"), file.inputStream())
                 } catch (_: Exception) { denied() }
             }
 

@@ -35,6 +35,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -93,6 +94,24 @@ internal fun Live2dChatScreen(
     val scope = rememberCoroutineScope()
     var avatarError by remember(modelId) { mutableStateOf("") }
     var mouthOpenness by remember(companion.id) { mutableStateOf<Float?>(null) }
+    // Generated models are pulled into the on-device store before the WebView asks for them, so
+    // the page never waits on the network file-by-file. Bundled models need nothing.
+    val generatedJobId = remember(modelId) { generatedLive2dJobId(modelId) }
+    var prefetchProgress by remember(modelId) { mutableStateOf<Pair<Int, Int>?>(null) }
+    var prefetchDone by remember(modelId) { mutableStateOf(generatedJobId == null) }
+    LaunchedEffect(modelId) {
+        val jobId = generatedJobId ?: return@LaunchedEffect
+        val cache = context.live2dModelCache()
+        runCatching {
+            cache.prefetch(api, jobId) { done, total -> prefetchProgress = done to total }
+        }.onFailure { failure ->
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
+            // Fall through: the interceptor will still try each file on demand.
+            avatarError = if (failure.message?.contains("live2d_file_corrupt") == true) "形象文件校验失败，正在重新下载" else ""
+        }
+        prefetchProgress = null
+        prefetchDone = true
+    }
     val speech = remember(companion.id) {
         AiSpeechQueue(
             cacheDir = java.io.File(context.cacheDir, "speech"),
@@ -181,20 +200,46 @@ internal fun Live2dChatScreen(
                     .fillMaxWidth()
                     .weight(1.15f)
             ) {
-                Live2dAvatarView(
-                    api = api,
-                    modelId = modelId,
-                    modifier = Modifier.fillMaxSize(),
-                    speakText = speakText,
-                    mouthOpenness = mouthOpenness,
-                    onEvent = { event ->
-                        when (event) {
-                            is Live2dEvent.Error -> avatarError = event.message
-                            is Live2dEvent.Ready -> avatarError = ""
-                            Live2dEvent.PageReady -> Unit
+                if (prefetchDone) {
+                    Live2dAvatarView(
+                        api = api,
+                        modelId = modelId,
+                        modifier = Modifier.fillMaxSize(),
+                        speakText = speakText,
+                        mouthOpenness = mouthOpenness,
+                        onEvent = { event ->
+                            when (event) {
+                                is Live2dEvent.Error -> avatarError = event.message
+                                is Live2dEvent.Ready -> avatarError = ""
+                                Live2dEvent.PageReady -> Unit
+                            }
                         }
+                    )
+                } else {
+                    val progress = prefetchProgress
+                    Column(
+                        Modifier.fillMaxSize().padding(horizontal = 48.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        if (progress == null || progress.second == 0) {
+                            CircularProgressIndicator(color = Color(0xFF9A6B2F), modifier = Modifier.size(28.dp))
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { progress.first.toFloat() / progress.second },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Color(0xFF9A6B2F),
+                                trackColor = Color(0xFFE3DCCB)
+                            )
+                        }
+                        Text(
+                            if (progress == null) "正在准备形象…" else "正在准备形象 ${progress.first}/${progress.second}",
+                            color = Color(0xFF6E6E73), fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 10.dp)
+                        )
+                        Text("只需下载一次，之后会直接从手机打开", color = Color(0xFF9A9A9E), fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
                     }
-                )
+                }
 
                 // Top bar overlays the stage.
                 Row(

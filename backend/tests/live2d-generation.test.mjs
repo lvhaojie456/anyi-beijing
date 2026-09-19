@@ -105,6 +105,22 @@ test('Live2D queue ownership, idempotency, lease fencing, validation and binding
     assert.equal((await req(`/internal/live2d/jobs/${id}/complete`,{token:workerToken,lease:currentLease,method:'POST',body:{}})).status,200);
     assert.equal((await req(`/ai/live2d/jobs/${id}/files/preview.png`,{token:other})).status,404);
     assert.deepEqual(Buffer.from((await req(`/ai/live2d/jobs/${id}/files/preview.png`,{token:owner})).data),png);
+    // Files of a succeeded job are immutable: cacheable for a year with the artifact hash as ETag, and a manifest lets the client verify.
+    {
+      const r=await app.fetch(new Request(`http://localhost/ai/live2d/jobs/${id}/files/runtime/model.moc3`,{headers:{Authorization:'Bearer '+owner}}),env);
+      assert.equal(r.headers.get('Cache-Control'),'private, max-age=31536000, immutable');
+      assert.equal(r.headers.get('ETag'),'"'+createHash('sha256').update(artifacts['runtime/model.moc3']).digest('hex')+'"');
+      assert.equal(r.headers.get('Content-Length'),String(artifacts['runtime/model.moc3'].length));
+      const manifest=await req(`/ai/live2d/jobs/${id}/manifest`,{token:owner});
+      assert.equal(manifest.status,200);
+      assert.equal(manifest.data.jobId,id);
+      const names=manifest.data.files.map(f=>f.name).sort();
+      assert.deepEqual(names,['preview.png','runtime/model.moc3','runtime/model.model3.json','runtime/texture.png']);
+      const moc=manifest.data.files.find(f=>f.name==='runtime/model.moc3');
+      assert.equal(moc.sha256,createHash('sha256').update(artifacts['runtime/model.moc3']).digest('hex'));
+      assert.equal(moc.size,artifacts['runtime/model.moc3'].length);
+      assert.equal((await req(`/ai/live2d/jobs/${id}/manifest`,{token:other})).status,404);
+    }
     assert.equal((await req(`/ai/live2d/jobs/${id}/activate`,{token:owner,method:'POST',body:{}})).status,200);
     assert.equal((await req(`/ai/companions/${companion}`,{token:owner})).data.companion.live2dModel,'generated:'+id);
     await req(`/ai/companions/${companion}/live2d`,{token:owner,method:'PATCH',body:{live2dModel:'kei'}});
