@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { isIP } from "node:net";
-import { Live2dError, live2dUploadLimit, registerLive2dRoutes } from "./live2d.js";
+import { registerAdminRoutes } from "./admin/routes.js";
+import { ApiError } from "./errors.js";
+import { Live2dError, live2dEnabled, live2dUploadLimit, registerLive2dRoutes } from "./live2d.js";
 
-type Role = "user" | "admin";
+export type Role = "user" | "admin";
 
-type Bindings = {
+export type Bindings = {
   DB: AppDatabase;
   ASSETS: AssetBucket;
   AUTH_SECRET: string;
@@ -91,7 +93,7 @@ type AssetBucket = {
   delete(key: string): Promise<unknown>;
 };
 
-type AuthUser = {
+export type AuthUser = {
   id: string;
   username: string;
   displayName: string;
@@ -159,7 +161,7 @@ type MemorialRow = {
   updated_at: string;
 };
 
-type CommunityPostRow = {
+export type CommunityPostRow = {
   id: string;
   user_id: string;
   username: string;
@@ -178,7 +180,7 @@ type CommunityPostRow = {
   moderated_by?: string | null;
 };
 
-type CommunityCommentRow = {
+export type CommunityCommentRow = {
   id: string;
   post_id: string;
   user_id: string;
@@ -194,7 +196,7 @@ type CommunityCommentRow = {
   moderated_by?: string | null;
 };
 
-type CommunityReportRow = {
+export type CommunityReportRow = {
   id: string;
   reporter_id: string;
   target_type: "post" | "comment";
@@ -209,7 +211,7 @@ type CommunityReportRow = {
   reporter_display_name?: string;
 };
 
-type UserModerationRow = {
+export type UserModerationRow = {
   user_id: string;
   status: "blocked" | "banned";
   reason: string | null;
@@ -218,7 +220,7 @@ type UserModerationRow = {
   updated_at: string;
 };
 
-type CommunityVolunteerRow = {
+export type CommunityVolunteerRow = {
   id: string;
   title: string;
   body: string;
@@ -448,16 +450,6 @@ async function withAiAvatarUploadLock<T>(key: string, task: () => Promise<T>): P
 
 async function withAiVoiceRequestLock<T>(key: string, task: () => Promise<T>): Promise<T> {
   return withSerializedKey(aiVoiceRequestTails, key, task);
-}
-
-class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    readonly details?: unknown
-  ) {
-    super(code);
-  }
 }
 
 const app = new Hono<AppEnv>();
@@ -1054,88 +1046,11 @@ app.delete("/me", requireAuth, async (c) => {
   if (user.role === "admin") {
     throw new ApiError(403, "admin_account_deletion_forbidden");
   }
-
-  const assetRows = await c.env.DB.prepare("SELECT asset_key FROM assets WHERE owner_id = ?")
-    .bind(user.id)
-    .all<{ asset_key: string }>();
-
-  // Remove user-owned records before the user row so this also works with the
-  // stricter foreign keys used by the MySQL deployment.
-  const cleanupStatements = [
-    [
-      "DELETE FROM community_reports WHERE target_type = 'comment' AND target_id IN (SELECT id FROM community_post_comments WHERE user_id = ?)",
-      [user.id]
-    ],
-    ["DELETE FROM community_post_comments WHERE user_id = ?", [user.id]],
-    ["DELETE FROM community_post_likes WHERE user_id = ?", [user.id]],
-    [
-      "DELETE FROM community_post_comments WHERE post_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
-      [user.id]
-    ],
-    [
-      "DELETE FROM community_post_likes WHERE post_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
-      [user.id]
-    ],
-    ["DELETE FROM community_reports WHERE reporter_id = ?", [user.id]],
-    [
-      "DELETE FROM community_reports WHERE target_type = 'post' AND target_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
-      [user.id]
-    ],
-    ["DELETE FROM community_posts WHERE user_id = ?", [user.id]],
-    ["DELETE FROM community_volunteer_applications WHERE user_id = ?", [user.id]],
-    ["DELETE FROM ai_chat_messages WHERE user_id = ?", [user.id]],
-    ["DELETE FROM ai_memory_items WHERE user_id = ?", [user.id]],
-    ["DELETE FROM ai_memory_settings WHERE user_id = ?", [user.id]],
-    ["DELETE FROM live2d_jobs WHERE user_id = ?", [user.id]],
-    ["DELETE FROM ai_companions WHERE user_id = ?", [user.id]],
-    ["DELETE FROM ai_profiles WHERE user_id = ?", [user.id]],
-    ["DELETE FROM feature_unlocks WHERE user_id = ?", [user.id]],
-    ["DELETE FROM memorials WHERE owner_id = ?", [user.id]],
-    [
-      "DELETE FROM order_messages WHERE sender_id = ? OR order_id IN (SELECT id FROM ritual_orders WHERE user_id = ?)",
-      [user.id, user.id]
-    ],
-    [
-      "DELETE FROM payment_events WHERE order_id IN (SELECT id FROM ritual_orders WHERE user_id = ?) OR order_id IN (SELECT id FROM talisman_orders WHERE user_id = ?)",
-      [user.id, user.id]
-    ],
-    ["DELETE FROM ritual_orders WHERE user_id = ?", [user.id]],
-    ["DELETE FROM talisman_orders WHERE user_id = ?", [user.id]],
-    ["DELETE FROM upload_reviews WHERE owner_id = ?", [user.id]],
-    ["DELETE FROM crash_reports WHERE user_id = ?", [user.id]],
-    ["DELETE FROM user_moderation WHERE user_id = ?", [user.id]],
-    ["UPDATE asset_delete_queue SET owner_id = NULL WHERE owner_id = ?", [user.id]],
-    ["DELETE FROM assets WHERE owner_id = ?", [user.id]],
-    ["UPDATE audit_logs SET actor_id = NULL WHERE actor_id = ?", [user.id]],
-    ["DELETE FROM users WHERE id = ?", [user.id]]
-  ] as Array<[string, unknown[]]>;
-
-  const auditStatement = c.env.DB.prepare(
-    `INSERT INTO audit_logs (
-      id, actor_id, actor_role, action, target_type, target_id,
-      ip, user_agent, metadata_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    crypto.randomUUID(),
-    user.id,
-    user.role,
-    "user.account.delete",
-    "user",
-    user.id,
-    clientIp(c),
-    c.req.header("User-Agent") || null,
-    JSON.stringify({ hardDelete: true }),
-    new Date().toISOString()
-  );
-  const assetQueueStatements = assetRows.results.map((row) =>
-    c.env.DB.prepare(
-      `INSERT INTO asset_delete_queue (id, owner_id, asset_key, reason, created_at) VALUES (?, ?, ?, ?, ?)`
-    ).bind(crypto.randomUUID(), user.id, row.asset_key, "account_deleted", new Date().toISOString())
-  );
-  const cleanupPrepared = cleanupStatements.map(([query, params]) =>
-    c.env.DB.prepare(query).bind(...params)
-  );
-  await c.env.DB.batch([auditStatement, ...assetQueueStatements, ...cleanupPrepared]);
+  await deleteUserAccount(c, user, {
+    action: "user.account.delete",
+    actor: user,
+    metadata: { hardDelete: true }
+  });
 
   // Keep the response deliberately small: the token is invalid as soon as the
   // user row is removed and all private records have been cleaned up.
@@ -3225,446 +3140,31 @@ app.post("/legal/account-deletion/request", async (c) => {
   );
 });
 
-app.get("/admin", (c) => c.html(adminPage()));
-app.get("/admin/", (c) => c.html(adminPage()));
-
-app.get("/admin/audit-logs", requireAuth, async (c) => {
-  requireAdmin(c);
-  const rows = await c.env.DB.prepare(
-    "SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200"
-  ).all();
-  return c.json({ logs: rows.results });
-});
-
-app.get("/admin/upload-reviews", requireAuth, async (c) => {
-  requireAdmin(c);
-  const status = c.req.query("status") || "pending";
-  const rows = await c.env.DB.prepare(
-    "SELECT * FROM upload_reviews WHERE status = ? ORDER BY created_at DESC LIMIT 200"
-  )
-    .bind(status)
-    .all();
-  return c.json({ reviews: rows.results });
-});
-
-app.patch("/admin/upload-reviews/:id", requireAuth, async (c) => {
-  const user = requireAdmin(c);
-  const body = await parseJson(c);
-  const status = readString(body, "status", { required: true, max: 20 });
-  const reason = readString(body, "reason", { max: 300 }) || null;
-
-  if (!["approved", "rejected", "quarantined"].includes(status)) {
-    throw new ApiError(400, "invalid_review_status");
-  }
-
-  const review = await c.env.DB.prepare("SELECT * FROM upload_reviews WHERE id = ?")
-    .bind(c.req.param("id"))
-    .first<{ id: string; asset_key: string; owner_id: string; status: string }>();
-  if (!review) {
-    throw new ApiError(404, "review_not_found");
-  }
-  if (review.status !== "pending") {
-    if (review.status === status) {
-      return c.json({ ok: true });
-    }
-    throw new ApiError(409, "review_status_conflict", {
-      currentStatus: review.status,
-      requestedStatus: status
-    });
-  }
-
-  const update = await c.env.DB.prepare(
-    `UPDATE upload_reviews
-     SET status = ?, reason = ?, reviewed_at = ?, reviewed_by = ?
-     WHERE id = ? AND status = 'pending'`
-  )
-    .bind(status, reason, new Date().toISOString(), user.id, review.id)
-    .run();
-  if (Number(update.meta.changes || 0) !== 1) {
-    const current = await c.env.DB.prepare("SELECT status FROM upload_reviews WHERE id = ?")
-      .bind(review.id)
-      .first<{ status: string }>();
-    if (current?.status === status) {
-      return c.json({ ok: true });
-    }
-    throw new ApiError(409, "review_status_conflict", {
-      currentStatus: current?.status || "unknown",
-      requestedStatus: status
-    });
-  }
-
-  if (status === "rejected" || status === "quarantined") {
-    await setAssetVisibility(c, review.asset_key, "private", review.owner_id);
-    await clearRejectedAiCompanionAvatarReferences(c, review.asset_key, review.owner_id);
-    await clearRejectedAiVoiceReferences(c, review.asset_key, review.owner_id);
-    await queueAssetDelete(c, review.asset_key, review.owner_id, `upload_review_${status}`);
-  } else if (status === "approved") {
-    const profileReference = await c.env.DB.prepare(
-      `SELECT u.id
-       FROM users u
-       JOIN assets a ON a.url = u.avatar_url
-       WHERE a.asset_key = ?
-       LIMIT 1`
-    )
-      .bind(review.asset_key)
-      .first<{ id: string }>();
-    if (profileReference) {
-      await setAssetVisibility(c, review.asset_key, "public", profileReference.id);
-    }
-  }
-
-  await writeAudit(c, {
-    action: "admin.upload.review",
-    targetType: "upload_review",
-    targetId: review.id,
-    metadata: { status, reason }
-  });
-
-  return c.json({ ok: true });
-});
-
-app.get("/admin/community/moderation", requireAuth, async (c) => {
-  requireAdmin(c);
-  const status = c.req.query("status") || "pending";
-  if (!["pending", "approved", "rejected", "blocked", "all"].includes(status)) {
-    throw new ApiError(400, "invalid_community_moderation_status");
-  }
-
-  const postQuery = `SELECT p.*, u.username, u.display_name, u.avatar_url
-    FROM community_posts p
-    JOIN users u ON u.id = p.user_id
-    ${status === "all" ? "" : "WHERE p.status = ?"}
-    ORDER BY p.created_at DESC LIMIT 200`;
-  const commentQuery = `SELECT cc.*, u.username, u.display_name, u.avatar_url
-    FROM community_post_comments cc
-    JOIN users u ON u.id = cc.user_id
-    ${status === "all" ? "" : "WHERE cc.status = ?"}
-    ORDER BY cc.created_at DESC LIMIT 200`;
-  const posts = status === "all"
-    ? await c.env.DB.prepare(postQuery).all<CommunityPostRow>()
-    : await c.env.DB.prepare(postQuery).bind(status).all<CommunityPostRow>();
-  const comments = status === "all"
-    ? await c.env.DB.prepare(commentQuery).all<CommunityCommentRow>()
-    : await c.env.DB.prepare(commentQuery).bind(status).all<CommunityCommentRow>();
-
-  return c.json({
-    posts: posts.results.map(serializeCommunityPost),
-    comments: comments.results.map(serializeCommunityComment)
-  });
-});
-
-app.patch("/admin/community/posts/:id", requireAuth, async (c) => {
-  const admin = requireAdmin(c);
-  const body = await parseJson(c);
-  const status = readString(body, "status", { required: true, max: 20 });
-  const reason = readString(body, "reason", { max: 300 }) || null;
-  if (!["pending", "approved", "rejected", "blocked"].includes(status)) {
-    throw new ApiError(400, "invalid_community_moderation_status");
-  }
-
-  const post = await c.env.DB.prepare(
-    "SELECT id, user_id, image_urls, status FROM community_posts WHERE id = ?"
-  )
-    .bind(c.req.param("id"))
-    .first<{ id: string; user_id: string; image_urls: string; status: string }>();
-  if (!post) {
-    throw new ApiError(404, "community_post_not_found");
-  }
-
-  if (status === "approved") {
-    for (const url of parseStringArray(post.image_urls || "[]")) {
-      const key = assetKeyFromUrl(url);
-      if (!key) continue;
-      const review = await c.env.DB.prepare(
-        "SELECT status FROM upload_reviews WHERE asset_key = ? ORDER BY created_at DESC LIMIT 1"
-      )
-        .bind(key)
-        .first<{ status: string }>();
-      if (review && review.status !== "approved") {
-        throw new ApiError(409, "community_media_not_approved");
-      }
-    }
-  }
-
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    `UPDATE community_posts
-     SET status = ?, moderation_reason = ?, moderated_at = ?, moderated_by = ?, updated_at = ?
-     WHERE id = ?`
-  )
-    .bind(status, reason, now, admin.id, now, post.id)
-    .run();
-
-  const imageUrls = parseStringArray(post.image_urls || "[]");
-  if (status === "approved") {
-    await setCommunityAssetVisibility(c, imageUrls, "public", post.user_id);
-  } else if (status === "rejected" || status === "blocked") {
-    await setCommunityAssetVisibility(c, imageUrls, "private", post.user_id);
-    if (post.status !== status) {
-      for (const url of imageUrls) {
-        const key = assetKeyFromUrl(url);
-        if (key) await queueAssetDelete(c, key, post.user_id, `community_post_${status}`);
-      }
-    }
-  }
-
-  await writeAudit(c, {
-    action: "admin.community.post.moderate",
-    targetType: "community_post",
-    targetId: post.id,
-    metadata: { status, reason }
-  });
-  return c.json({ ok: true, status });
-});
-
-app.patch("/admin/community/comments/:id", requireAuth, async (c) => {
-  const admin = requireAdmin(c);
-  const body = await parseJson(c);
-  const status = readString(body, "status", { required: true, max: 20 });
-  const reason = readString(body, "reason", { max: 300 }) || null;
-  if (!["pending", "approved", "rejected", "blocked"].includes(status)) {
-    throw new ApiError(400, "invalid_community_moderation_status");
-  }
-  const comment = await c.env.DB.prepare(
-    "SELECT id FROM community_post_comments WHERE id = ?"
-  )
-    .bind(c.req.param("id"))
-    .first<{ id: string }>();
-  if (!comment) {
-    throw new ApiError(404, "community_comment_not_found");
-  }
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    `UPDATE community_post_comments
-     SET status = ?, moderation_reason = ?, moderated_at = ?, moderated_by = ?, updated_at = ?
-     WHERE id = ?`
-  )
-    .bind(status, reason, now, admin.id, now, comment.id)
-    .run();
-  await writeAudit(c, {
-    action: "admin.community.comment.moderate",
-    targetType: "community_post_comment",
-    targetId: comment.id,
-    metadata: { status, reason }
-  });
-  return c.json({ ok: true, status });
-});
-
-app.get("/admin/community/reports", requireAuth, async (c) => {
-  requireAdmin(c);
-  const status = c.req.query("status") || "pending";
-  if (!["pending", "actioned", "dismissed", "all"].includes(status)) {
-    throw new ApiError(400, "invalid_community_report_status");
-  }
-  const sql = `SELECT r.*, u.username AS reporter_username, u.display_name AS reporter_display_name
-    FROM community_reports r
-    JOIN users u ON u.id = r.reporter_id
-    ${status === "all" ? "" : "WHERE r.status = ?"}
-    ORDER BY r.created_at DESC LIMIT 200`;
-  const rows = status === "all"
-    ? await c.env.DB.prepare(sql).all<CommunityReportRow>()
-    : await c.env.DB.prepare(sql).bind(status).all<CommunityReportRow>();
-  return c.json({ reports: rows.results });
-});
-
-app.patch("/admin/community/reports/:id", requireAuth, async (c) => {
-  const admin = requireAdmin(c);
-  const body = await parseJson(c);
-  const action = readString(body, "action", { required: true, max: 30 });
-  const reason = readString(body, "reason", { max: 300 }) || null;
-  if (!["approve", "remove", "dismiss", "block_user", "ban_user"].includes(action)) {
-    throw new ApiError(400, "invalid_community_report_action");
-  }
-
-  const report = await c.env.DB.prepare("SELECT * FROM community_reports WHERE id = ?")
-    .bind(c.req.param("id"))
-    .first<CommunityReportRow>();
-  if (!report) {
-    throw new ApiError(404, "community_report_not_found");
-  }
-  if (report.status !== "pending") {
-    throw new ApiError(409, "community_report_already_reviewed");
-  }
-
-  let targetUserId: string | null = null;
-  if (report.target_type === "post") {
-    const target = await c.env.DB.prepare(
-      "SELECT id, user_id, image_urls, status FROM community_posts WHERE id = ?"
-    )
-      .bind(report.target_id)
-      .first<{ id: string; user_id: string; image_urls: string; status: string }>();
-    if (!target) throw new ApiError(404, "community_post_not_found");
-    targetUserId = target.user_id;
-    if (action === "approve" || action === "remove") {
-      await moderateCommunityTargetPost(c, admin, target, action === "approve" ? "approved" : "rejected", reason);
-    }
-  } else {
-    const target = await c.env.DB.prepare(
-      "SELECT id, user_id, status FROM community_post_comments WHERE id = ?"
-    )
-      .bind(report.target_id)
-      .first<{ id: string; user_id: string; status: string }>();
-    if (!target) throw new ApiError(404, "community_comment_not_found");
-    targetUserId = target.user_id;
-    if (action === "approve" || action === "remove") {
-      await moderateCommunityTargetComment(c, admin, target, action === "approve" ? "approved" : "rejected", reason);
-    }
-  }
-
-  if ((action === "block_user" || action === "ban_user") && targetUserId) {
-    await setUserModeration(c, admin, targetUserId, action === "ban_user" ? "banned" : "blocked", reason, null);
-  }
-
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    "UPDATE community_reports SET status = ?, reviewer_id = ?, reviewed_at = ?, updated_at = ? WHERE id = ?"
-  )
-    .bind(action === "dismiss" ? "dismissed" : "actioned", admin.id, now, now, report.id)
-    .run();
-  await writeAudit(c, {
-    action: "admin.community.report.review",
-    targetType: `community_${report.target_type}`,
-    targetId: report.target_id,
-    metadata: { reportId: report.id, action, reason }
-  });
-  return c.json({ ok: true, status: action === "dismiss" ? "dismissed" : "actioned" });
-});
-
-app.get("/admin/users/moderation", requireAuth, async (c) => {
-  requireAdmin(c);
-  const rows = await c.env.DB.prepare(
-    `SELECT m.*, u.username, u.display_name
-     FROM user_moderation m JOIN users u ON u.id = m.user_id
-     ORDER BY m.updated_at DESC LIMIT 200`
-  ).all<Record<string, unknown>>();
-  return c.json({ users: rows.results });
-});
-
-app.patch("/admin/users/:id/moderation", requireAuth, async (c) => {
-  const admin = requireAdmin(c);
-  const body = await parseJson(c);
-  const status = readString(body, "status", { required: true, max: 20 });
-  const reason = readString(body, "reason", { max: 300 }) || null;
-  const expiresAt = readString(body, "expiresAt", { max: 40 }) || null;
-  if (!["active", "blocked", "banned"].includes(status)) {
-    throw new ApiError(400, "invalid_user_moderation_status");
-  }
-  const target = await c.env.DB.prepare("SELECT id, role FROM users WHERE id = ? AND deleted_at IS NULL")
-    .bind(c.req.param("id"))
-    .first<{ id: string; role: Role }>();
-  if (!target) throw new ApiError(404, "user_not_found");
-  if (target.role === "admin") throw new ApiError(403, "admin_moderation_forbidden");
-  if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
-    throw new ApiError(400, "invalid_moderation_expiry");
-  }
-
-  if (status === "active") {
-    await c.env.DB.prepare("DELETE FROM user_moderation WHERE user_id = ?").bind(target.id).run();
-  } else {
-    await setUserModeration(c, admin, target.id, status as "blocked" | "banned", reason, expiresAt);
-  }
-  await writeAudit(c, {
-    action: "admin.user.moderation",
-    targetType: "user",
-    targetId: target.id,
-    metadata: { status, reason, expiresAt }
-  });
-  return c.json({ ok: true, status });
-});
-
-app.get("/admin/crash-reports", requireAuth, async (c) => {
-  requireAdmin(c);
-  const rows = await c.env.DB.prepare(
-    "SELECT * FROM crash_reports ORDER BY created_at DESC LIMIT 200"
-  ).all();
-  return c.json({ reports: rows.results });
-});
-
-app.get("/admin/asset-delete-queue", requireAuth, async (c) => {
-  requireAdmin(c);
-  const rows = await c.env.DB.prepare(
-    "SELECT * FROM asset_delete_queue ORDER BY created_at DESC LIMIT 200"
-  ).all<Record<string, unknown>>();
-  return c.json({ items: rows.results });
-});
-
-app.post("/admin/asset-delete-queue/process", requireAuth, async (c) => {
-  requireAdmin(c);
-  const rows = await c.env.DB.prepare(
-    `SELECT id, asset_key, reason
-     FROM asset_delete_queue
-     WHERE status = 'pending'
-     ORDER BY created_at ASC LIMIT 50`
-  ).all<{ id: string; asset_key: string; reason: string }>();
-
-  let deleted = 0;
-  for (const row of rows.results) {
-    try {
-      if (!await assetDeletionAllowed(c, row.asset_key, row.reason)) {
-        await c.env.DB.prepare(
-          "UPDATE asset_delete_queue SET status = 'failed', processed_at = ?, error_message = ? WHERE id = ?"
-        )
-          .bind(new Date().toISOString(), "asset_delete_no_longer_allowed", row.id)
-          .run();
-        continue;
-      }
-      await c.env.ASSETS.delete(row.asset_key);
-      await c.env.DB.batch([
-        c.env.DB.prepare("DELETE FROM upload_reviews WHERE asset_key = ?").bind(row.asset_key),
-        c.env.DB.prepare("DELETE FROM assets WHERE asset_key = ?").bind(row.asset_key),
-        c.env.DB.prepare(
-          "UPDATE asset_delete_queue SET status = 'deleted', processed_at = ?, error_message = NULL WHERE id = ?"
-        ).bind(new Date().toISOString(), row.id)
-      ]);
-      deleted += 1;
-    } catch (error) {
-      await c.env.DB.prepare(
-        "UPDATE asset_delete_queue SET status = 'failed', processed_at = ?, error_message = ? WHERE id = ?"
-      )
-        .bind(new Date().toISOString(), String(error), row.id)
-        .run();
-    }
-  }
-
-  await writeAudit(c, {
-    action: "admin.asset_delete_queue.process",
-    targetType: "asset_delete_queue",
-    metadata: { attempted: rows.results.length, deleted }
-  });
-
-  return c.json({ attempted: rows.results.length, deleted });
-});
-
-app.get("/admin/account-deletion-requests", requireAuth, async (c) => {
-  requireAdmin(c);
-  const rows = await c.env.DB.prepare(
-    "SELECT * FROM account_deletion_requests ORDER BY created_at DESC LIMIT 200"
-  ).all();
-  return c.json({ requests: rows.results });
-});
-
-app.patch("/admin/account-deletion-requests/:id", requireAuth, async (c) => {
-  requireAdmin(c);
-  const body = await parseJson(c);
-  const status = readString(body, "status", { required: true, max: 20 });
-  if (!["pending", "processing", "completed", "rejected"].includes(status)) {
-    throw new ApiError(400, "invalid_deletion_request_status");
-  }
-
-  await c.env.DB.prepare(
-    "UPDATE account_deletion_requests SET status = ?, updated_at = ? WHERE id = ?"
-  )
-    .bind(status, new Date().toISOString(), c.req.param("id"))
-    .run();
-
-  await writeAudit(c, {
-    action: "admin.account_deletion_request.status_update",
-    targetType: "account_deletion_request",
-    targetId: c.req.param("id"),
-    metadata: { status }
-  });
-
-  return c.json({ ok: true });
+registerAdminRoutes(app, {
+  requireAuth,
+  requireAdmin,
+  parseJson,
+  readString,
+  writeAudit,
+  setAssetVisibility,
+  clearRejectedAiCompanionAvatarReferences,
+  clearRejectedAiVoiceReferences,
+  queueAssetDelete,
+  assetDeletionAllowed,
+  assetKeyFromUrl,
+  parseStringArray,
+  serializeCommunityPost,
+  serializeCommunityComment,
+  serializeCommunityVolunteer,
+  moderateCommunityTargetPost,
+  moderateCommunityTargetComment,
+  setUserModeration,
+  deleteUserAccount,
+  readEnvBoolean,
+  speechEnabled,
+  aiVoiceAsrConfigured,
+  speechDailyCharLimit,
+  live2dEnabled
 });
 
 function jsonResponse(body: unknown, status: number) {
@@ -3845,6 +3345,95 @@ function requireAdmin(c: Context<AppEnv>) {
     throw new ApiError(403, "admin_required");
   }
   return user;
+}
+
+async function deleteUserAccount(
+  c: Context<AppEnv>,
+  target: { id: string; role: Role },
+  audit: { action: string; actor: AuthUser; metadata?: Record<string, unknown> }
+) {
+  const assetRows = await c.env.DB.prepare("SELECT asset_key FROM assets WHERE owner_id = ?")
+    .bind(target.id)
+    .all<{ asset_key: string }>();
+
+  // Remove user-owned records before the user row so this also works with the
+  // stricter foreign keys used by the MySQL deployment.
+  const cleanupStatements = [
+    [
+      "DELETE FROM community_reports WHERE target_type = 'comment' AND target_id IN (SELECT id FROM community_post_comments WHERE user_id = ?)",
+      [target.id]
+    ],
+    ["DELETE FROM community_post_comments WHERE user_id = ?", [target.id]],
+    ["DELETE FROM community_post_likes WHERE user_id = ?", [target.id]],
+    [
+      "DELETE FROM community_post_comments WHERE post_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
+      [target.id]
+    ],
+    [
+      "DELETE FROM community_post_likes WHERE post_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
+      [target.id]
+    ],
+    ["DELETE FROM community_reports WHERE reporter_id = ?", [target.id]],
+    [
+      "DELETE FROM community_reports WHERE target_type = 'post' AND target_id IN (SELECT id FROM community_posts WHERE user_id = ?)",
+      [target.id]
+    ],
+    ["DELETE FROM community_posts WHERE user_id = ?", [target.id]],
+    ["DELETE FROM community_volunteer_applications WHERE user_id = ?", [target.id]],
+    ["DELETE FROM ai_chat_messages WHERE user_id = ?", [target.id]],
+    ["DELETE FROM ai_memory_items WHERE user_id = ?", [target.id]],
+    ["DELETE FROM ai_memory_settings WHERE user_id = ?", [target.id]],
+    ["DELETE FROM live2d_jobs WHERE user_id = ?", [target.id]],
+    ["DELETE FROM ai_companions WHERE user_id = ?", [target.id]],
+    ["DELETE FROM ai_profiles WHERE user_id = ?", [target.id]],
+    ["DELETE FROM feature_unlocks WHERE user_id = ?", [target.id]],
+    ["DELETE FROM memorials WHERE owner_id = ?", [target.id]],
+    [
+      "DELETE FROM order_messages WHERE sender_id = ? OR order_id IN (SELECT id FROM ritual_orders WHERE user_id = ?)",
+      [target.id, target.id]
+    ],
+    [
+      "DELETE FROM payment_events WHERE order_id IN (SELECT id FROM ritual_orders WHERE user_id = ?) OR order_id IN (SELECT id FROM talisman_orders WHERE user_id = ?)",
+      [target.id, target.id]
+    ],
+    ["DELETE FROM ritual_orders WHERE user_id = ?", [target.id]],
+    ["DELETE FROM talisman_orders WHERE user_id = ?", [target.id]],
+    ["DELETE FROM upload_reviews WHERE owner_id = ?", [target.id]],
+    ["DELETE FROM crash_reports WHERE user_id = ?", [target.id]],
+    ["DELETE FROM user_moderation WHERE user_id = ?", [target.id]],
+    ["UPDATE asset_delete_queue SET owner_id = NULL WHERE owner_id = ?", [target.id]],
+    ["DELETE FROM assets WHERE owner_id = ?", [target.id]],
+    ["UPDATE audit_logs SET actor_id = NULL WHERE actor_id = ?", [target.id]],
+    ["DELETE FROM users WHERE id = ?", [target.id]]
+  ] as Array<[string, unknown[]]>;
+
+  const now = new Date().toISOString();
+  const auditStatement = c.env.DB.prepare(
+    `INSERT INTO audit_logs (
+      id, actor_id, actor_role, action, target_type, target_id,
+      ip, user_agent, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    crypto.randomUUID(),
+    audit.actor.id,
+    audit.actor.role,
+    audit.action,
+    "user",
+    target.id,
+    clientIp(c),
+    c.req.header("User-Agent") || null,
+    JSON.stringify(audit.metadata || {}),
+    now
+  );
+  const assetQueueStatements = assetRows.results.map((row) =>
+    c.env.DB.prepare(
+      `INSERT INTO asset_delete_queue (id, owner_id, asset_key, reason, created_at) VALUES (?, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), target.id, row.asset_key, "account_deleted", now)
+  );
+  const cleanupPrepared = cleanupStatements.map(([query, params]) =>
+    c.env.DB.prepare(query).bind(...params)
+  );
+  await c.env.DB.batch([auditStatement, ...assetQueueStatements, ...cleanupPrepared]);
 }
 
 async function moderateCommunityTargetPost(
@@ -4380,6 +3969,12 @@ async function cleanupUnassignedAsset(
 }
 
 async function assetUrlStillReferenced(c: Context<AppEnv>, url: string) {
+  // Profile avatars are ordinary reviewed uploads, so they must be protected
+  // here too: rejecting one clears nothing, and the account still points at it.
+  const profileAvatarReference = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM users WHERE avatar_url = ?"
+  ).bind(url).first<{ count: number | string }>();
+  if (Number(profileAvatarReference?.count || 0) > 0) return true;
   const userReference = await c.env.DB.prepare(
     "SELECT COUNT(*) AS count FROM users WHERE ai_companion_list_background_url = ?"
   ).bind(url).first<{ count: number | string }>();
@@ -7154,182 +6749,6 @@ function legalPage(
       <p><a href="/legal/privacy">隐私政策</a> · <a href="/legal/terms">用户协议</a> · <a href="/legal/ai-disclaimer">AI 服务说明</a> · <a href="/legal/account-deletion">账号注销</a></p>
     </footer>
   </main>
-</body>
-</html>`;
-}
-
-function adminPage() {
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>安忆管理后台</title>
-  <style>
-    *{box-sizing:border-box}
-    body{margin:0;background:#f5f7fb;color:#10223b;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    header{position:sticky;top:0;z-index:3;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid #e1e7f0}
-    .wrap{max-width:1180px;margin:0 auto;padding:18px}
-    .top{display:flex;gap:14px;align-items:center;justify-content:space-between}
-    h1{font-size:24px;margin:0;font-weight:900}
-    h2{font-size:18px;margin:0 0 12px;font-weight:900}
-    .muted{color:#667085;font-size:13px}
-    .tabs{display:flex;gap:8px;overflow:auto;padding-top:14px}
-    button,.tab{border:0;border-radius:8px;padding:10px 14px;background:#10223b;color:white;font-weight:800;cursor:pointer}
-    button.secondary,.tab{background:white;color:#10223b;border:1px solid #d8e0ec}
-    button.danger{background:#b42318}
-    button.good{background:#2f7d62}
-    .tab.active{background:#2f7d62;color:white;border-color:#2f7d62}
-    main{max-width:1180px;margin:0 auto;padding:18px}
-    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-    .card{background:white;border:1px solid #e1e7f0;border-radius:8px;box-shadow:0 8px 24px rgba(16,34,59,.06);padding:14px}
-    .metric{font-size:28px;font-weight:900}
-    .list{display:grid;gap:12px}
-    input,select,textarea{width:100%;border:1px solid #d8e0ec;border-radius:8px;padding:10px;font:inherit;background:white}
-    textarea{min-height:76px}
-    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    .split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .pill{display:inline-flex;border-radius:999px;padding:4px 8px;background:#e9f5ef;color:#2f7d62;font-size:12px;font-weight:800}
-    pre{white-space:pre-wrap;background:#f8fafc;border:1px solid #e1e7f0;border-radius:8px;padding:10px;max-height:220px;overflow:auto}
-    .hidden{display:none!important}
-    @media(max-width:820px){.grid,.split{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
-  </style>
-</head>
-<body>
-  <header>
-    <div class="wrap">
-      <div class="top">
-        <div>
-          <h1>安忆管理后台</h1>
-          <div class="muted">上传审核、审计、崩溃和注销请求统一管理</div>
-        </div>
-        <div class="row">
-          <span id="adminName" class="muted"></span>
-          <button class="secondary" onclick="logout()">退出</button>
-        </div>
-      </div>
-      <div id="tabs" class="tabs hidden">
-        <button class="tab active" data-tab="dashboard" onclick="showTab('dashboard')">概览</button>
-        <button class="tab" data-tab="uploads" onclick="showTab('uploads')">上传审核</button>
-        <button class="tab" data-tab="community" onclick="showTab('community')">社区审核</button>
-        <button class="tab" data-tab="reports" onclick="showTab('reports')">举报处理</button>
-        <button class="tab" data-tab="users" onclick="showTab('users')">用户处置</button>
-        <button class="tab" data-tab="deletions" onclick="showTab('deletions')">注销申请</button>
-        <button class="tab" data-tab="crashes" onclick="showTab('crashes')">崩溃日志</button>
-        <button class="tab" data-tab="audit" onclick="showTab('audit')">审计日志</button>
-        <button class="tab" data-tab="assetDeletes" onclick="showTab('assetDeletes')">文件删除</button>
-      </div>
-    </div>
-  </header>
-  <main>
-    <section id="loginView" class="card">
-      <h2>管理员登录</h2>
-      <div class="split">
-        <input id="loginUsername" placeholder="管理员账号，例如 admin" />
-        <input id="loginPassword" placeholder="密码" type="password" />
-      </div>
-      <div class="row" style="margin-top:12px">
-        <button onclick="login()">登录后台</button>
-        <span id="loginMessage" class="muted"></span>
-      </div>
-    </section>
-    <section id="appView" class="hidden">
-      <section id="dashboard" class="tabPanel">
-        <div class="grid">
-          <div class="card"><div class="muted">待审核上传</div><div id="mUploads" class="metric">0</div></div>
-          <div class="card"><div class="muted">待审社区内容</div><div id="mCommunity" class="metric">0</div></div>
-          <div class="card"><div class="muted">待处理举报</div><div id="mReports" class="metric">0</div></div>
-          <div class="card"><div class="muted">崩溃日志</div><div id="mCrashes" class="metric">0</div></div>
-          <div class="card"><div class="muted">注销申请</div><div id="mDeletes" class="metric">0</div></div>
-        </div>
-      </section>
-      <section id="uploads" class="tabPanel hidden"><div class="card"><h2>上传内容审核</h2><div class="row"><select id="uploadStatus" onchange="loadUploads()"><option value="pending">pending</option><option value="approved">approved</option><option value="rejected">rejected</option><option value="quarantined">quarantined</option></select></div><div id="uploadsList" class="list" style="margin-top:12px"></div></div></section>
-      <section id="community" class="tabPanel hidden"><div class="card"><h2>社区内容审核</h2><div class="row"><select id="communityStatus" onchange="loadCommunity()"><option value="pending">pending</option><option value="approved">approved</option><option value="rejected">rejected</option><option value="blocked">blocked</option><option value="all">all</option></select></div><div id="communityList" class="list" style="margin-top:12px"></div></div></section>
-      <section id="reports" class="tabPanel hidden"><div class="card"><h2>社区举报处理</h2><div id="reportsList" class="list"></div></div></section>
-      <section id="users" class="tabPanel hidden"><div class="card"><h2>用户处置</h2><div id="moderatedUsersList" class="list"></div></div></section>
-      <section id="deletions" class="tabPanel hidden"><div class="card"><h2>账号注销申请</h2><div id="deletionsList" class="list"></div></div></section>
-      <section id="crashes" class="tabPanel hidden"><div class="card"><h2>崩溃日志</h2><div id="crashesList" class="list"></div></div></section>
-      <section id="audit" class="tabPanel hidden"><div class="card"><h2>审计日志</h2><div id="auditList" class="list"></div></div></section>
-      <section id="assetDeletes" class="tabPanel hidden"><div class="card"><div class="row" style="justify-content:space-between"><h2>文件删除队列</h2><button class="danger" onclick="processAssetDeletes()">处理待删除</button></div><div id="assetDeletesList" class="list"></div></div></section>
-    </section>
-  </main>
-<script>
-var token = localStorage.getItem('anyi_admin_token') || '';
-var currentUser = JSON.parse(localStorage.getItem('anyi_admin_user') || 'null');
-var cache = { uploads: [], community: {posts:[],comments:[]}, reports: [], users: [], crashes: [], deletions: [], audit: [], assetDeletes: [] };
-
-function esc(value){ return String(value == null ? '' : value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
-function authHeaders(extra){ var h = Object.assign({'Authorization':'Bearer ' + token}, extra || {}); return h; }
-async function api(path, options){
-  options = options || {};
-  options.headers = Object.assign({}, options.headers || {}, options.body instanceof FormData ? authHeaders() : authHeaders({'Content-Type':'application/json'}));
-  var res = await fetch(path, options);
-  var text = await res.text();
-  var data = text ? JSON.parse(text) : {};
-  if(!res.ok){ throw new Error(data.error || text || 'request_failed'); }
-  return data;
-}
-function setMessage(id,msg){ document.getElementById(id).textContent = msg || ''; }
-
-async function login(){
-  setMessage('loginMessage','登录中...');
-  try{
-    var data = await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:loginUsername.value.trim(),password:loginPassword.value})}).then(async function(r){var d=await r.json(); if(!r.ok) throw new Error(d.error); return d;});
-    if(data.user.role !== 'admin') throw new Error('admin_required');
-    token = data.token; currentUser = data.user;
-    localStorage.setItem('anyi_admin_token', token);
-    localStorage.setItem('anyi_admin_user', JSON.stringify(currentUser));
-    boot();
-  }catch(e){ setMessage('loginMessage','登录失败：' + e.message); }
-}
-function logout(){ localStorage.removeItem('anyi_admin_token'); localStorage.removeItem('anyi_admin_user'); location.reload(); }
-function boot(){
-  if(token && currentUser && currentUser.role === 'admin'){
-    loginView.classList.add('hidden'); appView.classList.remove('hidden'); tabs.classList.remove('hidden'); adminName.textContent = currentUser.username + ' · 管理员';
-    refreshAll();
-  }else{ loginView.classList.remove('hidden'); appView.classList.add('hidden'); tabs.classList.add('hidden'); }
-}
-function showTab(name){
-  document.querySelectorAll('.tab').forEach(function(x){x.classList.toggle('active', x.dataset.tab === name);});
-  document.querySelectorAll('.tabPanel').forEach(function(x){x.classList.toggle('hidden', x.id !== name);});
-  if(name === 'uploads') loadUploads();
-  if(name === 'community') loadCommunity();
-  if(name === 'reports') loadReports();
-  if(name === 'users') loadModeratedUsers();
-  if(name === 'deletions') loadDeletions();
-  if(name === 'crashes') loadCrashes();
-  if(name === 'audit') loadAudit();
-  if(name === 'assetDeletes') loadAssetDeletes();
-}
-async function refreshAll(){ await Promise.all([loadUploads(), loadCommunity(), loadReports(), loadModeratedUsers(), loadCrashes(), loadDeletions(), loadAudit(), loadAssetDeletes()]).catch(function(e){console.warn(e);}); renderMetrics(); }
-function renderMetrics(){ mUploads.textContent=cache.uploads.length; mCommunity.textContent=(cache.community.posts||[]).length+(cache.community.comments||[]).length; mReports.textContent=cache.reports.length; mCrashes.textContent=cache.crashes.length; mDeletes.textContent=cache.deletions.length; }
-
-async function loadUploads(){ var d=await api('/admin/upload-reviews?status='+encodeURIComponent(uploadStatus.value)); cache.uploads=d.reviews||[]; renderUploads(); renderMetrics(); }
-function renderUploads(){ uploadsList.innerHTML = cache.uploads.map(function(r){return '<div class="card"><div><b>'+esc(r.mime_type)+'</b> <span class="pill">'+esc(r.status)+'</span></div><div class="muted">'+esc(r.asset_key)+' · '+esc(r.size_bytes)+' bytes</div><div class="row"><button class="good" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'approved\\')">通过</button><button class="danger" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'rejected\\')">拒绝</button><button class="secondary" onclick="reviewUpload(\\''+esc(r.id)+'\\',\\'quarantined\\')">隔离</button></div></div>';}).join('') || '<div class="muted">暂无记录</div>'; }
-async function reviewUpload(id,status){ var reason = status === 'approved' ? '' : prompt('原因', status) || status; await api('/admin/upload-reviews/'+id,{method:'PATCH',body:JSON.stringify({status:status,reason:reason})}); await loadUploads(); }
-
-async function loadCommunity(){ var d=await api('/admin/community/moderation?status='+encodeURIComponent(communityStatus.value)); cache.community=d||{posts:[],comments:[]}; renderCommunity(); renderMetrics(); }
-function renderCommunity(){ var html=(cache.community.posts||[]).map(function(r){return '<div class="card"><b>动态</b> <span class="pill">'+esc(r.moderationStatus||r.status)+'</span><div class="muted">'+esc(r.authorName||r.authorUsername||'')+' · '+esc(r.createdAt||'')+'</div><p>'+esc(r.content||'')+'</p><div class="row"><button class="good" onclick="moderatePost(\\''+esc(r.id)+'\\',\\'approved\\')">通过</button><button class="danger" onclick="moderatePost(\\''+esc(r.id)+'\\',\\'rejected\\')">拒绝</button><button class="secondary" onclick="moderatePost(\\''+esc(r.id)+'\\',\\'blocked\\')">屏蔽</button></div></div>';}).join(''); html+=(cache.community.comments||[]).map(function(r){return '<div class="card"><b>评论</b> <span class="pill">'+esc(r.moderationStatus||r.status)+'</span><div class="muted">'+esc(r.authorName||r.authorUsername||'')+' · '+esc(r.createdAt||'')+'</div><p>'+esc(r.content||'')+'</p><div class="row"><button class="good" onclick="moderateComment(\\''+esc(r.id)+'\\',\\'approved\\')">通过</button><button class="danger" onclick="moderateComment(\\''+esc(r.id)+'\\',\\'rejected\\')">拒绝</button><button class="secondary" onclick="moderateComment(\\''+esc(r.id)+'\\',\\'blocked\\')">屏蔽</button></div></div>';}).join(''); communityList.innerHTML=html||'<div class="muted">暂无社区内容</div>'; }
-async function moderatePost(id,status){ var reason=status==='approved'?'':prompt('原因',status)||status; await api('/admin/community/posts/'+id,{method:'PATCH',body:JSON.stringify({status:status,reason:reason})}); await loadCommunity(); }
-async function moderateComment(id,status){ var reason=status==='approved'?'':prompt('原因',status)||status; await api('/admin/community/comments/'+id,{method:'PATCH',body:JSON.stringify({status:status,reason:reason})}); await loadCommunity(); }
-
-async function loadReports(){ var d=await api('/admin/community/reports?status=pending'); cache.reports=d.reports||[]; reportsList.innerHTML=cache.reports.map(function(r){return '<div class="card"><b>'+esc(r.target_type)+'</b> <span class="pill">'+esc(r.status)+'</span><div class="muted">举报人：'+esc(r.reporter_display_name||r.reporter_username||'')+' · '+esc(r.created_at)+'</div><p>'+esc(r.reason)+'</p><div class="row"><button class="good" onclick="reviewReport(\\''+esc(r.id)+'\\',\\'approve\\')">保留</button><button class="danger" onclick="reviewReport(\\''+esc(r.id)+'\\',\\'remove\\')">移除</button><button class="secondary" onclick="reviewReport(\\''+esc(r.id)+'\\',\\'dismiss\\')">驳回举报</button><button class="danger" onclick="reviewReport(\\''+esc(r.id)+'\\',\\'block_user\\')">屏蔽用户</button></div></div>';}).join('')||'<div class="muted">暂无待处理举报</div>'; renderMetrics(); }
-async function reviewReport(id,action){ var reason=prompt('处理备注',action)||action; await api('/admin/community/reports/'+id,{method:'PATCH',body:JSON.stringify({action:action,reason:reason})}); await loadReports(); await loadCommunity(); }
-
-async function loadModeratedUsers(){ var d=await api('/admin/users/moderation'); cache.users=d.users||[]; moderatedUsersList.innerHTML=cache.users.map(function(r){return '<div class="card"><b>'+esc(r.display_name||r.username)+'</b> <span class="pill">'+esc(r.status)+'</span><div class="muted">'+esc(r.username)+' · '+esc(r.updated_at)+'</div><p>'+esc(r.reason||'')+'</p><button class="good" onclick="unblockUser(\\''+esc(r.user_id)+'\\')">解除处置</button></div>';}).join('')||'<div class="muted">暂无被处置用户</div>'; }
-async function unblockUser(id){ await api('/admin/users/'+id+'/moderation',{method:'PATCH',body:JSON.stringify({status:'active'})}); await loadModeratedUsers(); }
-
-async function loadDeletions(){ var d=await api('/admin/account-deletion-requests'); cache.deletions=d.requests||[]; renderDeletions(); renderMetrics(); }
-function renderDeletions(){ deletionsList.innerHTML = cache.deletions.map(function(r){return '<div class="card"><b>'+esc(r.username)+'</b> <span class="pill">'+esc(r.status)+'</span><div class="muted">'+esc(r.contact||'')+' · '+esc(r.created_at)+'</div><p>'+esc(r.reason||'')+'</p><select onchange="setDeletionStatus(\\''+esc(r.id)+'\\',this.value)"><option>更新状态</option><option value="processing">processing</option><option value="completed">completed</option><option value="rejected">rejected</option></select></div>';}).join('') || '<div class="muted">暂无申请</div>'; }
-async function setDeletionStatus(id,status){ if(status==='更新状态')return; await api('/admin/account-deletion-requests/'+id,{method:'PATCH',body:JSON.stringify({status:status})}); await loadDeletions(); }
-
-async function loadCrashes(){ var d=await api('/admin/crash-reports'); cache.crashes=d.reports||[]; renderCrashes(); renderMetrics(); }
-function renderCrashes(){ crashesList.innerHTML = cache.crashes.map(function(r){return '<div class="card"><b>'+esc(r.error_type)+'</b><div class="muted">'+esc(r.platform)+' · '+esc(r.app_version||'')+' · '+esc(r.created_at)+'</div><p>'+esc(r.message||'')+'</p><pre>'+esc((r.stack_trace||'').slice(0,4000))+'</pre></div>';}).join('') || '<div class="muted">暂无崩溃日志</div>'; }
-async function loadAudit(){ var d=await api('/admin/audit-logs'); cache.audit=d.logs||[]; auditList.innerHTML = cache.audit.map(function(r){return '<div class="card"><b>'+esc(r.action)+'</b><div class="muted">'+esc(r.actor_role||'')+' · '+esc(r.target_type)+' · '+esc(r.created_at)+'</div><pre>'+esc(r.metadata_json||'{}')+'</pre></div>';}).join('') || '<div class="muted">暂无审计日志</div>'; }
-async function loadAssetDeletes(){ var d=await api('/admin/asset-delete-queue'); cache.assetDeletes=d.items||[]; assetDeletesList.innerHTML = cache.assetDeletes.map(function(r){return '<div class="card"><b>'+esc(r.status)+'</b><div class="muted">'+esc(r.asset_key)+' · '+esc(r.reason)+' · '+esc(r.created_at)+'</div></div>';}).join('') || '<div class="muted">暂无删除任务</div>'; }
-async function processAssetDeletes(){ var d=await api('/admin/asset-delete-queue/process',{method:'POST',body:JSON.stringify({})}); alert('处理 '+d.attempted+' 条，删除 '+d.deleted+' 条'); await loadAssetDeletes(); }
-boot();
-</script>
 </body>
 </html>`;
 }

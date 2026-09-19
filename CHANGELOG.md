@@ -29,6 +29,12 @@
 - Android 把用户的生成形象永久缓存在手机上：新增 `Live2dModelCache.kt`，文件存在应用私有目录 `filesDir/live2d/<jobId>/`，进入沉浸模式先按服务端清单并发（4 路）下载缺失文件并显示“正在准备形象 n/15”进度，之后每次打开都从本地读、不发网络请求。每个文件落盘前用清单里的 SHA-256 校验，不一致丢弃重下；先写临时文件再原子改名。选择器与生成页的 `preview.png` 也走这份缓存。清理规则：删除陪伴对象删对应任务目录，退出登录清空整个目录，总量超过 200 MB 按最近使用淘汰到 150 MB。此前 WebView、原生层与服务端三处都禁用缓存，每次进沉浸模式都重新拉 15 个文件约 1.7 MB（线上日志一次 5–6 秒，弱网时一张 1.2 MB 的纹理曾等了 37 秒）。
 - 后端新增 `GET /ai/live2d/jobs/:id/manifest`：成功任务的 `runtime/*` 与 `preview.png` 清单（`name`、`sha256`、`size`、`mimeType`），只对本人可见。
 - Android `AnyiApiClient` 新增 `live2dManifest`；新增单元测试 `Live2dModelCacheTest`（4 项：下载一次后全部本地命中、损坏文件拒收且不留临时文件、按最近使用淘汰与删除/清空、非法 id/路径/清单拒绝）。
+- 管理后台整体重做（`https://api.anyibj.cn/admin`）。后端新增 `backend/src/admin/`：`routes.ts` 注册全部 `/admin/*` 接口，`page.ts` 提供页面外壳，`ui-styles.ts`、`ui-script.ts` 提供样式与前端脚本（`/admin/app.css`、`/admin/app.js`）。页面仍是单个静态页，无外部依赖。
+- 新增后台接口：`GET /admin/overview`（各队列待处理量、近 14 天注册/动态/对话/崩溃活跃度、服务开关与今日语音合成用量、最近 12 条操作）、`GET /admin/users`（按用户名或昵称搜索，可按处置中和管理员筛选）、`GET /admin/users/:id`（资料、内容计数、陪伴对象、纪念馆、相关审计记录）、`DELETE /admin/users/:id`（管理员注销账号）、`GET /admin/volunteer/posts`、`GET /admin/live2d/jobs`、`POST /admin/upload-reviews/batch`（批量通过或拒绝，逐条返回结果）、`POST /admin/asset-delete-queue/:id/retry`（把失败的文件重新加入待删除）。
+- 后台前端重做：队列导航带待处理计数，列表与详情同屏；上传审核详情可直接预览图片、播放音频、查看文本，并显示上传用途和上传者；社区内容区分动态与评论并预览图片；举报详情直接展示被举报内容与作者；用户详情含内容计数与处置入口；新增义工招募管理与动态形象任务查看。全部状态改为中文文案，拒绝、隔离、屏蔽、封禁、移除、注销都必须在页面内填写原因（不再使用浏览器弹窗）。
+- 后台支持多选批量通过或拒绝上传、键盘操作（`J`/`K` 切换、`A` 通过、`X` 拒绝、`Q` 隔离或屏蔽、`/` 搜索、`Esc` 关闭详情）、操作结果提示、失败原因中文提示、登录状态校验与详情深链接。
+- 后台页面设置严格内容安全策略（`default-src 'none'`、脚本与样式同源、禁止内联脚本与内联样式），登录令牌默认只写入当前标签页的 `sessionStorage`，勾选「在这台电脑记住登录」后才写入 `localStorage`。
+- 新增 `backend/tests/admin-console.test.mjs`：覆盖页面与静态资源、CSP、ETag 304、未登录与非管理员的 403、总览计数与活跃度、上传审核（列表增强、状态冲突、批量与副作用）、社区审核与举报内容、用户目录与处置、管理员注销、文件删除队列与重试、义工招募与报名、崩溃与审计筛选、动态形象任务。
 
 ### 修改
 
@@ -40,14 +46,20 @@
 - 后端 `GET /ai/live2d/jobs/:id/files/*` 响应头由 `private, no-store` 改为 `private, max-age=31536000, immutable`，并带 `ETag`（文件 SHA-256）、`X-Content-SHA256` 与 `Content-Length`。成功任务的产物不可变（重试只允许失败或取消的任务），可以安全地长期缓存。
 - 沉浸模式 `Live2dChatScreen` 在生成模型未就绪前不再直接挂载 WebView，而是先预取再挂载；WebView 拦截器 `Live2dAvatarView` 改为先读本地缓存、未命中才下载并校验。WebView 自身仍为 `LOAD_NO_CACHE`，页面收到的响应头仍为 `no-store`。
 - `docs/live2d-generation.md` 新增“手机端缓存”一节并更新接口表；`backend/README.md` 接口列表同步。
+- `GET /admin/upload-reviews` 增加 `username`、`display_name`、`reviewer_username` 和各状态计数；`GET /admin/community/moderation` 增加按状态合并的内容计数；`GET /admin/community/reports` 增加被举报内容的 `target` 与状态计数；`GET /admin/audit-logs` 支持 `action`、`actor`、`targetId` 筛选并附带操作者用户名；`GET /admin/crash-reports` 附带上报用户；`GET /admin/account-deletion-requests` 附带匹配到的账号；`GET /admin/asset-delete-queue` 支持 `status` 筛选并返回计数。以上接口原有响应字段保持不变。
+- 管理员处置用户时接受 `expiresAt` 到期时间，后台可设置 1 天、7 天、30 天或手动解除。
+- `PATCH /community/volunteer/:id` 与义工报名审核接口继续由后台复用，无需改动。
 
 ### 修复
 
-- 无。
+- `/admin/users/moderation` 不再被 `/admin/users/:id` 抢先匹配：此前该路径会落到按 ID 查询用户的分支，导致后台的「处置记录」列表在部分请求下返回 404。现在字面路径注册在前并始终优先。
+- `assetUrlStillReferenced` 增加对 `users.avatar_url` 的检查：此前个人头像被审核拒绝后，若账号仍引用该图片，文件删除队列仍会把它删除，导致用户头像变成 404。
+- 管理员注销账号时不再有静默失败：`DELETE /admin/users/:id` 要求输入用户名确认，并在注销成功后把关联的注销申请标记为「已完成」。
 
 ### 移除
 
-- 无。
+- 移除 `backend/src/index.ts` 中的内联管理后台页面 `adminPage()` 与全部 `/admin/*` 路由实现，迁移到 `backend/src/admin/routes.ts`；页面外壳与样式、脚本分别迁移到 `backend/src/admin/page.ts`、`ui-styles.ts`、`ui-script.ts`。原 `GET /admin` 路径与行为不变。
+- 移除 `backend/src/index.ts` 内联的 `ApiError` 类，迁移到 `backend/src/errors.ts`（供 `live2d.ts` 与管理后台共用，避免循环依赖）。错误码与响应格式不变。
 
 ### 运维/部署
 
@@ -55,6 +67,8 @@
 - 无新增环境变量。制作端不读取 `name`，无需切换。
 - 验证：后端 `npm test` 53 项通过（Live2D 用例新增名字必填/长度/控制字符、幂等哈希含名字、形象列表、改名鉴权、生成形象重新绑定与他人任务拒绝）；Android `:app:testDebugUnitTest` 23 项通过（`Live2dJobRequestTest` 校验 multipart 含 `name` 字段、空名字在客户端即拒绝）。
 - 形象缓存：无数据库迁移、无新增环境变量；制作端不受影响。后端只改响应头并新增一个只读接口。验证：后端 `npm test` 53 项通过（Live2D 用例新增清单内容、`Cache-Control`/`ETag`/`Content-Length` 断言与他人 404）；Android `:app:testDebugUnitTest` 27 项通过、lint 无错误。
+- 管理后台重做：无数据库迁移，无环境变量变化。后端部署需要完整执行 `tsc -p tsconfig.node.json`，`backend/src/admin/` 下的新文件必须一起编译进 `dist-node`（沿用现有发布流程即可）。验证：后端 `npm test` 现在 66 项通过（含新增 `tests/admin-console.test.mjs`）。
+- 本次未部署到生产；上线需用户明确授权后按既有流程执行。
 
 ## 当前发布（2026-09-18 16:00）
 

@@ -44,10 +44,14 @@
 - `POST /ai/companions/:id/background`、`PATCH /ai/companions/:id/background`：直接上传、设置或清除指定陪伴对象的聊天背景（与列表背景独立）
 - `POST /ai/companions/:id/avatar/studio`：头像创作 multipart 接口；提交 `model`、原文 `prompt`、可选 `useCurrentAvatar` 与图片字段 `file`。无参考图时生图，有上传图或使用当前头像时改图
 - `POST /crash-reports`：App 崩溃日志上报
-- `GET /admin`：Web 管理后台
-- `GET /admin/audit-logs`：审计日志
-- `GET /admin/upload-reviews`、`PATCH /admin/upload-reviews/:id`：上传内容审核
-- `GET /admin/asset-delete-queue`、`POST /admin/asset-delete-queue/process`：本地文件删除队列
+- `GET /admin`：Web 管理后台页面（`/admin/app.js`、`/admin/app.css` 为其脚本与样式）
+- `GET /admin/overview`：后台总览（队列计数、近 14 天活跃度、服务能力）
+- `GET /admin/audit-logs`：审计日志，支持按操作类型和操作者筛选
+- `GET /admin/upload-reviews`、`PATCH /admin/upload-reviews/:id`、`POST /admin/upload-reviews/batch`：上传内容审核与批量处理
+- `GET /admin/users`、`GET /admin/users/:id`、`DELETE /admin/users/:id`：用户检索、详情与账号注销
+- `GET /admin/volunteer/posts`：义工招募列表（含待审报名数）
+- `GET /admin/live2d/jobs`：动态形象生成任务
+- `GET /admin/asset-delete-queue`、`POST /admin/asset-delete-queue/process`、`POST /admin/asset-delete-queue/:id/retry`：本地文件删除队列
 - `GET /admin/crash-reports`：崩溃日志
 - `GET /admin/account-deletion-requests`、`PATCH /admin/account-deletion-requests/:id`：账号注销申请
 - `GET /app/config`：App 运行配置与微信、支付配置
