@@ -26,6 +26,9 @@
 - 生成动态形象时必须给形象起名字：`Live2dStudioScreen` 新增“形象名字”输入（1–40 字），随 multipart 字段 `name` 提交并参与幂等哈希；生成记录以名字为标题，完成后的任务可点击铅笔图标改名（`PATCH /ai/live2d/jobs/:id/name`）。后端 `live2d_jobs` 新增可空列 `name`（MySQL `0016_live2d_job_name.sql` / SQLite `0034_live2d_job_name.sql`），创建接口校验名字必填、去控制字符与多余空白、上限 40 字，任务响应新增 `name`。
 - “选择动态形象”对话框新增“我创建的”一组：`GET /ai/companions/:id/live2d/avatars` 返回该对象生成成功的形象（`jobId`、`modelId`、`name`、`previewPath`），选择器按名字和预览图展示，可随时切回以前生成的形象；内置形象移到“内置形象”一组。此前生成成功的形象只能在生成页点“使用此形象”，一旦换成内置形象就再也选不回来。
 - Android `AnyiApiClient` 新增 `listLive2dAvatars`、`renameLive2dJob`；`createLive2dJob` 新增必填 `name` 参数。
+- Android 把用户的生成形象永久缓存在手机上：新增 `Live2dModelCache.kt`，文件存在应用私有目录 `filesDir/live2d/<jobId>/`，进入沉浸模式先按服务端清单并发（4 路）下载缺失文件并显示“正在准备形象 n/15”进度，之后每次打开都从本地读、不发网络请求。每个文件落盘前用清单里的 SHA-256 校验，不一致丢弃重下；先写临时文件再原子改名。选择器与生成页的 `preview.png` 也走这份缓存。清理规则：删除陪伴对象删对应任务目录，退出登录清空整个目录，总量超过 200 MB 按最近使用淘汰到 150 MB。此前 WebView、原生层与服务端三处都禁用缓存，每次进沉浸模式都重新拉 15 个文件约 1.7 MB（线上日志一次 5–6 秒，弱网时一张 1.2 MB 的纹理曾等了 37 秒）。
+- 后端新增 `GET /ai/live2d/jobs/:id/manifest`：成功任务的 `runtime/*` 与 `preview.png` 清单（`name`、`sha256`、`size`、`mimeType`），只对本人可见。
+- Android `AnyiApiClient` 新增 `live2dManifest`；新增单元测试 `Live2dModelCacheTest`（4 项：下载一次后全部本地命中、损坏文件拒收且不留临时文件、按最近使用淘汰与删除/清空、非法 id/路径/清单拒绝）。
 
 ### 修改
 
@@ -34,6 +37,9 @@
 - 后端 `PATCH /ai/companions/:id/live2d` 除内置 id 外，接受本对象自己生成成功的 `generated:<jobId>`（校验 `live2d_jobs.companion_id`、`user_id` 与 `status='succeeded'`，其它一律 400 `live2d_model_not_supported`）；`live2dModel` 字段长度上限由 32 放宽到 48 以容纳该格式。
 - `docs/live2d-generation.md` App 工作流与接口表同步（起名、我创建的形象、沉浸模式语音）。
 - 新增 `app/src/debug/res/xml/network_security_config.xml`：仅 debug 构建允许对 `10.0.2.2`、`127.0.0.1`、`localhost` 走明文 HTTP，让模拟器调试包能连本机 `start-live2d-local.mjs` 的隔离 API（此前 `docs/live2d-generation.md` 写的 `-PANYI_API_BASE_URL=http://10.0.2.2:8789` 实际会被 `cleartextTrafficPermitted="false"` 拦下）。release 构建仍用 `src/main` 的配置，全域禁止明文。
+- 后端 `GET /ai/live2d/jobs/:id/files/*` 响应头由 `private, no-store` 改为 `private, max-age=31536000, immutable`，并带 `ETag`（文件 SHA-256）、`X-Content-SHA256` 与 `Content-Length`。成功任务的产物不可变（重试只允许失败或取消的任务），可以安全地长期缓存。
+- 沉浸模式 `Live2dChatScreen` 在生成模型未就绪前不再直接挂载 WebView，而是先预取再挂载；WebView 拦截器 `Live2dAvatarView` 改为先读本地缓存、未命中才下载并校验。WebView 自身仍为 `LOAD_NO_CACHE`，页面收到的响应头仍为 `no-store`。
+- `docs/live2d-generation.md` 新增“手机端缓存”一节并更新接口表；`backend/README.md` 接口列表同步。
 
 ### 修复
 
@@ -48,6 +54,7 @@
 - 迁移 MySQL `0016_live2d_job_name.sql` / SQLite `0034_live2d_job_name.sql`：`live2d_jobs` 加可空列 `name`，服务启动时自动应用；回滚 `ALTER TABLE live2d_jobs DROP COLUMN name` 即可。线上现有 2 个已成功任务没有名字，选择器里显示为“我的形象”，用户可在生成记录里改名。
 - 无新增环境变量。制作端不读取 `name`，无需切换。
 - 验证：后端 `npm test` 53 项通过（Live2D 用例新增名字必填/长度/控制字符、幂等哈希含名字、形象列表、改名鉴权、生成形象重新绑定与他人任务拒绝）；Android `:app:testDebugUnitTest` 23 项通过（`Live2dJobRequestTest` 校验 multipart 含 `name` 字段、空名字在客户端即拒绝）。
+- 形象缓存：无数据库迁移、无新增环境变量；制作端不受影响。后端只改响应头并新增一个只读接口。验证：后端 `npm test` 53 项通过（Live2D 用例新增清单内容、`Cache-Control`/`ETag`/`Content-Length` 断言与他人 404）；Android `:app:testDebugUnitTest` 27 项通过、lint 无错误。
 
 ## 当前发布（2026-09-18 16:00）
 

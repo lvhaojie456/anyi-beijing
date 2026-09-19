@@ -204,6 +204,12 @@ class AnyiApiClient(
         return request("POST", "/ai/live2d/jobs/$jobId/$action", authorized = true, body = body)
     }
 
+    /** File list with SHA-256 for a succeeded job; the on-device cache verifies downloads against it. */
+    fun live2dManifest(jobId: String): JSONObject {
+        require(jobId.matches(Regex("[a-f0-9-]{36}"))) { "live2d_invalid_id" }
+        return request("GET", "/ai/live2d/jobs/$jobId/manifest", authorized = true)
+    }
+
     fun readLive2dFile(jobId: String, file: String): ByteArray {
         val output = java.io.ByteArrayOutputStream()
         downloadLive2dFile(jobId, file, output, 32L * 1024 * 1024)

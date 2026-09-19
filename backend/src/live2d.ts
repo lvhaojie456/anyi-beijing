@@ -287,6 +287,15 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
       .bind(row.id,now(),row.companion_id,row.user_id).run();
     return c.json({ok:true,modelId:`generated:${row.id}`});
   });
+  // A succeeded job's artifacts never change (retry is only allowed for failed/cancelled jobs), so the
+  // client may keep them on disk forever, keyed by job id, and verify each file against this manifest.
+  app.get("/ai/live2d/jobs/:id/manifest",auth,async c => {
+    const row=await job(c,c.req.param("id"));
+    if (row.status!=="succeeded") throw new Live2dError(404,"live2d_not_ready");
+    const artifacts=(await files(c,row)).filter(a => a.name.startsWith("runtime/") || a.name==="preview.png");
+    return c.json({jobId:row.id,files:artifacts.map(a => ({name:a.name,sha256:a.sha256,size:Number(a.size_bytes),mimeType:a.mime_type}))},
+      200,{'Cache-Control':'private, max-age=31536000, immutable'});
+  });
   app.get("/ai/live2d/jobs/:id/files/*",auth,async c => {
     const row=await job(c,c.req.param("id"));
     if (row.status!=="succeeded") throw new Live2dError(404,"live2d_not_ready");
@@ -296,7 +305,8 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
     if (!artifact) throw new Live2dError(404,"live2d_file_not_found");
     const object=await c.env.ASSETS.get(artifact.asset_key);
     if (!object) throw new Live2dError(404,"live2d_file_not_found");
-    return new Response(object.body,{headers:{'Content-Type':artifact.mime_type,'Cache-Control':'private, no-store',
+    return new Response(object.body,{headers:{'Content-Type':artifact.mime_type,'Content-Length':String(artifact.size_bytes),
+      'Cache-Control':'private, max-age=31536000, immutable','ETag':`"${artifact.sha256}"`,'X-Content-SHA256':artifact.sha256,
       ...(name==='project.zip' ? {'Content-Disposition':`attachment; filename="live2d-${row.id}.zip"`} : {})}});
   });
 

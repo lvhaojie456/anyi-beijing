@@ -937,6 +937,9 @@ internal fun AiCompanionScreen(
             onDismiss = { showEditor = false; refreshCompanions() },
             onSaved = { replaceCompanion(it); showEditor = false },
             onDeleted = { deletedId ->
+                // The server cascades the companion's generation jobs away; drop their local files too.
+                companions.firstOrNull { it.id == deletedId }?.live2dModel?.let(::generatedLive2dJobId)
+                    ?.let { jobId -> runCatching { context.live2dModelCache().remove(jobId) } }
                 companions = companions.filterNot { it.id == deletedId }
                 conversationStates = conversationStates - deletedId
                 workerJobs.remove(deletedId)?.cancel()
@@ -2230,11 +2233,12 @@ private fun GeneratedAvatarTile(
     onClick: () -> Unit
 ) {
     var preview by remember(avatar.jobId) { mutableStateOf<ImageBitmap?>(null) }
+    val context = LocalContext.current
     LaunchedEffect(avatar.jobId) {
         runCatching {
             withContext(Dispatchers.IO) {
-                val bytes = api.readLive2dFile(avatar.jobId, "preview.png")
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                val file = context.live2dModelCache().fetch(api, avatar.jobId, "preview.png")
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
             }
         }.onSuccess { preview = it }
     }

@@ -40,7 +40,8 @@ Mac 制作端（tools/live2d-worker）
 | POST /ai/live2d/jobs/:id/cancel | 取消未完成任务 |
 | POST /ai/live2d/jobs/:id/retry | 重试失败或取消任务；可带 `{"hint":"regenerate_image"}`，制作端据此放弃旧图片重新生成 |
 | POST /ai/live2d/jobs/:id/activate | 绑定成功产物 |
-| GET /ai/live2d/jobs/:id/files/* | 本人读取运行资产、预览或 project.zip |
+| GET /ai/live2d/jobs/:id/manifest | 成功任务的文件清单（`name`、`sha256`、`size`、`mimeType`，只含 `runtime/*` 与 `preview.png`），供手机端校验缓存 |
+| GET /ai/live2d/jobs/:id/files/* | 本人读取运行资产、预览或 project.zip；响应带 `Cache-Control: private, max-age=31536000, immutable`、`ETag`（文件 SHA-256）与 `Content-Length` |
 | POST /internal/live2d/jobs/claim | 制作端领取任务；响应含 `retryHint`，只在第一次领取时下发 |
 | POST /internal/live2d/jobs/:id/heartbeat | 续约及进度 |
 | GET /internal/live2d/jobs/:id/input | 领取者下载源图 |
@@ -49,6 +50,17 @@ Mac 制作端（tools/live2d-worker）
 | POST /internal/live2d/jobs/:id/fail | 标记失败，不暴露供应商响应；可带白名单 `diagnosisCode`、`suggestion` 与 ≤ 200 字 `summary`，任务响应原样透给本人 |
 
 内部接口必须携带 `Authorization: Bearer <LIVE2D_WORKER_TOKEN>`；领取后的操作还需 `X-Live2d-Lease`。租约 120 秒、15 秒续约、最多 3 次自动领取。前端显示真实阶段进度而非预计完成时间。每用户每日新建最多 10 项任务，源图最多 8 MB，单个运行资产最多 32 MB、精修 ZIP 最多 240 MB，总产物最多 350 MB。
+
+## 手机端缓存
+
+生成成功的模型不会再变（只有失败或取消的任务允许重试），所以 Android 把它永久存在应用私有目录 `filesDir/live2d/<jobId>/`（`Live2dModelCache.kt`），别的 App 读不到，卸载即清。
+
+- 首次进入沉浸模式先按清单并发下载全部文件（4 路），形象位置显示“正在准备形象 n/15”，之后再进直接从本地读，不发网络请求。
+- 每个文件落盘前用清单里的 SHA-256 校验，不一致丢弃重下，先写临时文件再原子改名，断网不会留下半个文件。
+- 选择器与生成页的 `preview.png` 走同一份缓存。
+- 清理：删除陪伴对象时删对应任务目录；退出登录清空整个目录（同一手机换账号不能看到别人的形象）；总量超过 200 MB 时按目录最近使用时间淘汰到 150 MB 以下（一个模型约 2 MB）。
+- WebView 自身仍是 `LOAD_NO_CACHE`，页面拿到的响应头也是 `no-store`：文件只从这份经过校验的本地存储供给，不经 WebView 的 HTTP 缓存。
+- 离线时形象能从本地打开，但聊天仍需联网，本期不做离线特殊处理。
 
 ## 语音与口型
 

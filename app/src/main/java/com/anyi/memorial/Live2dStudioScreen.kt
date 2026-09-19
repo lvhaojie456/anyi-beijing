@@ -236,7 +236,7 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
                     var bitmap by remember(job.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
                     LaunchedEffect(job.id) {
                         runCatching { withContext(Dispatchers.IO) {
-                            val bytes = api.readLive2dFile(job.id,"preview.png")
+                            val bytes = context.live2dModelCache().fetch(api, job.id, "preview.png").readBytes()
                             decodeStudioThumbnail(bytes)
                         } }.onSuccess { bitmap = it }
                     }

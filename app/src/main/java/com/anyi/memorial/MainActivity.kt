@@ -6411,6 +6411,8 @@ private fun writeSession(context: Context, user: AppUser) {
 }
 
 private fun clearSession(context: Context) {
+    // Generated avatars are account-private; never leave one account's models for the next login on this phone.
+    runCatching { context.live2dModelCache().clear() }
     context.appPrefs().edit()
         .remove(KEY_USER_ID)
         .remove(KEY_USER_NAME)
