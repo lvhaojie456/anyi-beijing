@@ -1,6 +1,6 @@
 # Live2D 生成监督方案：规则恢复 + 大模型诊断与处置
 
-状态：已按本方案实施于 PR `feat/live2d-supervisor`（A–E 合并为一个 PR，差异见 CHANGELOG「与方案文档的差异」）。日期：2026-09-18。对应讨论：线上任务 `5462ebc4` 两次失败与校验清单。
+状态：已按本方案实施于 PR [#9](https://github.com/lvhaojie456/anyi-beijing/pull/9)（A–E 合并为一个 PR，差异见 CHANGELOG 2026-09-18 段落「与方案文档的差异」），随 `main` `16cfa9c` 于 2026-09-18 上线；PR [#11](https://github.com/lvhaojie456/anyi-beijing/pull/11) 追加了监督审查超时重试。方案文档本身是 PR [#8](https://github.com/lvhaojie456/anyi-beijing/pull/8)。对应讨论：线上任务 `5462ebc4` 两次失败与校验清单。
 
 ## 1. 目标与边界
 

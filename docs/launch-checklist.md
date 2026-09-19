@@ -12,6 +12,9 @@
 - 数据库迁移：SQLite 使用 `backend/migrations/*.sql`，MySQL 使用 `backend/migrations-mysql/*.sql`
 - 腾讯云部署文档：`backend/TENCENT_DEPLOY.md`
 - 隐私政策、用户协议、AI 免责声明模板
+- AI 语音输入（腾讯云一句话识别）与语音输出（腾讯云语音合成，白名单音色）已上线，均由服务器开关控制
+- Live2D 动态形象：内置 6 个模型 + 提示词/照片异步生成（Mac 制作端 + 远程 4090），生成开关 `LIVE2D_ENABLED`
+- Web 管理后台 `https://api.anyibj.cn/admin`，官网 `https://anyi-memorial-site.pages.dev`
 
 ## 还需要准备
 

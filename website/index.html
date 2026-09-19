@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="安忆是一款云端纪念软件，提供云端纪念馆、人文社区、义工互助、绿色追忆和账号资料管理。"
+      content="安忆是一款云端纪念与数字陪伴软件，提供云端纪念馆、AI 陪伴、动态形象与语音回复、绿色追忆、远程礼祭和账号资料管理。"
     />
     <title>安忆 - 把想念安放在云端</title>
-    <link rel="icon" href="./assets/app-icon.png" />
+    <link rel="icon" href="./assets/favicon-256.png" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -19,6 +19,7 @@
       </a>
       <nav class="nav-links" aria-label="主要链接">
         <a href="#features">功能</a>
+        <a href="#voice">语音陪伴</a>
         <a href="#screens">截图</a>
         <a href="#download">下载</a>
         <a href="#privacy">隐私与协议</a>
@@ -31,19 +32,16 @@
         <div class="hero-copy">
           <p class="eyebrow">Android memorial app</p>
           <h1 id="hero-title">安忆</h1>
-          <p class="hero-subtitle">把想念安放在云端。纪念、互助、礼祭与心愿，都有一个可以回望的地方。</p>
+          <p class="hero-subtitle">把想念安放在云端。纪念、陪伴、礼祭与心愿，都有一个可以回望的地方。</p>
           <div class="hero-actions">
-            <a
-              class="button primary"
-              href="https://api.anyibj.cn/downloads/anyi-memorial-latest.apk"
-            >下载 Android 版</a>
+            <a class="button primary" href="https://api.anyibj.cn/downloads/anyi-memorial-latest.apk">下载 Android 版</a>
             <a class="button secondary" href="#screens">查看当前截图</a>
           </div>
-          <p class="release-note">当前为测试版本，微信登录与支付能力以实际配置进度为准。</p>
+          <p class="release-note">当前为公开测试版本，功能持续迭代中。微信登录与支付能力以实际配置进度为准。</p>
         </div>
         <div class="hero-media" aria-hidden="true">
           <img class="hero-phone phone-main" src="./assets/app-screen.png" alt="" />
-          <img class="hero-phone phone-second" src="./assets/profile-screen.png" alt="" />
+          <img class="hero-phone phone-second" src="./assets/ai-screen.png" alt="" />
           <img class="hero-phone phone-third" src="./assets/green-screen.png" alt="" />
         </div>
       </section>
@@ -54,12 +52,13 @@
           <h2>一个安静、克制，也能被长期维护的数字纪念空间</h2>
         </div>
         <p>
-          安忆提供云端纪念馆、人文社区、义工互助、绿色追忆、远程礼祭订单和个人资料管理。
-          产品仍在迭代中，适合先用于测试、演示和小范围体验。
+          安忆提供云端纪念馆、AI 陪伴、绿色追忆、远程礼祭订单和个人资料管理。
+          云端纪念馆可以长期保存纪念照片与祭奠记录；AI 陪伴可以围绕你提供的关系与称呼，
+          生成温和的陪伴式对话，并配有动态形象与语音回复。
         </p>
       </section>
 
-      <section class="section" id="features" aria-labelledby="features-title">
+      <section class="section features" id="features" aria-labelledby="features-title">
         <div class="section-heading">
           <p class="section-kicker">Features</p>
           <h2 id="features-title">核心功能</h2>
@@ -68,34 +67,71 @@
           <article class="feature-item">
             <span class="feature-number">01</span>
             <h3>云端纪念馆</h3>
-            <p>上传纪念照片，献花、点烛、上香和烧供，让重要的人和记忆有一个可以访问的位置。</p>
+            <p>上传纪念照片，献花、点烛、上香和供果，让重要的人和记忆有一个可以访问的位置。</p>
           </article>
           <article class="feature-item">
             <span class="feature-number">02</span>
-            <h3>人文社区</h3>
-            <p>分享纪念与互助内容，查看义工招募、报名进度和审核结果，让善意有清晰的落点。</p>
+            <h3>AI 陪伴</h3>
+            <p>创建陪伴人物，设定称呼、关系与记忆，生成温和的陪伴式对话，并保持清晰的 AI 边界。</p>
           </article>
           <article class="feature-item">
             <span class="feature-number">03</span>
+            <h3>动态形象与语音</h3>
+            <p>为陪伴对象绑定动态形象，回复时会说话、口型跟随，并生成可反复回放的语音条。</p>
+          </article>
+          <article class="feature-item">
+            <span class="feature-number">04</span>
             <h3>绿色追忆</h3>
             <p>远程礼祭、祈愿护符和订单同步集中在一个入口，便于后续接入真实履约流程。</p>
           </article>
           <article class="feature-item">
-            <span class="feature-number">04</span>
+            <span class="feature-number">05</span>
+            <h3>人文社区与互助</h3>
+            <p>分享纪念与互助内容，查看义工招募、报名进度和审核结果，让善意有清晰的落点。</p>
+          </article>
+          <article class="feature-item">
+            <span class="feature-number">06</span>
             <h3>个人设置</h3>
             <p>管理头像、昵称、账号状态、客服联系方式、隐私政策、用户协议和账号注销。</p>
           </article>
         </div>
       </section>
 
+      <section class="section voice" id="voice" aria-labelledby="voice-title">
+        <div class="voice-copy">
+          <p class="section-kicker">AI Voice</p>
+          <h2 id="voice-title">让她开口说话</h2>
+          <p>
+            为陪伴对象绑定动态形象后，可以在「说话声音」里选择音色。
+            AI 回复到达时，形象会边说边做出口型，同时生成一条可回放的语音条，
+            方便安静的时候戴上耳机重听，也方便把这句话留久一点。
+          </p>
+          <ul class="voice-points">
+            <li><strong>三种音色可选</strong>：沉稳男声、知性女声、温柔女声，随时切换。</li>
+            <li><strong>口型跟随</strong>：形象说话时嘴唇同步开合，而不是只播一段音频。</li>
+            <li><strong>语音像消息一样留存</strong>：语音条保存在对话里，可以反复播放。</li>
+            <li><strong>没有形象时只回文字</strong>：未绑定动态形象的对象保持纯文字回复，不打扰。</li>
+          </ul>
+          <p class="voice-note">语音由腾讯云语音合成服务生成，文案会发送至该服务用于合成，详见隐私政策。</p>
+        </div>
+        <figure class="voice-figure">
+          <img src="./assets/ai-screen.png" alt="安忆 AI 陪伴对话页面截图" />
+          <figcaption>
+            <span class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+            回复到达后自动播放，并保留语音条
+          </figcaption>
+        </figure>
+      </section>
+
       <section class="section showcase" id="screens" aria-label="应用截图">
         <div class="showcase-copy">
           <p class="section-kicker">Live Screens</p>
-          <h2>来自当前 Android App 的实时截图</h2>
-          <p>下面三张图来自最新版 Android App，展示云端纪念馆、绿色追忆与个人设置。</p>
+          <h2>来自当前 Android App 的真实截图</h2>
+          <p>下面四张图取自线上发布的最新版 App，展示云端纪念馆、AI 陪伴、绿色追忆与个人设置。</p>
         </div>
         <div class="screen-strip">
           <img src="./assets/app-screen.png" alt="安忆云端纪念馆页面截图" />
+          <img src="./assets/ai-screen.png" alt="安忆 AI 陪伴页面截图" />
           <img src="./assets/green-screen.png" alt="安忆绿色追忆页面截图" />
           <img src="./assets/profile-screen.png" alt="安忆个人设置页面截图" />
         </div>
@@ -104,17 +140,15 @@
       <section class="section download" id="download" aria-labelledby="download-title">
         <div class="download-copy">
           <p class="section-kicker">Download</p>
-          <h2 id="download-title">下载测试版 Android APK</h2>
+          <h2 id="download-title">下载 Android 版</h2>
           <p>
-            下载链接走正式 API 域名，适合大陆用户访问。安装前请确认来源可信，当前版本仍为测试包。
+            下载链接走正式 API 域名，适合大陆用户访问。当前为公开测试版本，安装前请确认来源可信，
+            遇到问题可通过页脚邮箱反馈。
           </p>
-          <a
-            class="button primary"
-            href="https://api.anyibj.cn/downloads/anyi-memorial-latest.apk"
-          >立即下载 APK</a>
+          <a class="button primary" href="https://api.anyibj.cn/downloads/anyi-memorial-latest.apk">立即下载 APK</a>
         </div>
         <figure class="qr-card">
-          <img src="./assets/download-qr.png" alt="安忆 Android 测试版下载二维码" width="180" height="180" />
+          <img src="./assets/download-qr.png" alt="安忆 Android 版下载二维码" width="180" height="180" />
           <figcaption>手机扫码下载</figcaption>
         </figure>
       </section>
@@ -122,11 +156,12 @@
       <section class="section privacy" id="privacy" aria-labelledby="privacy-title">
         <div>
           <p class="section-kicker">Trust</p>
-          <h2 id="privacy-title">隐私与协议</h2>
+          <h2 id="privacy-title">隐私、协议与 AI 边界</h2>
         </div>
         <div class="legal-links">
           <a href="https://api.anyibj.cn/legal/privacy">隐私政策</a>
           <a href="https://api.anyibj.cn/legal/terms">用户协议</a>
+          <a href="https://api.anyibj.cn/legal/ai-disclaimer">AI 陪伴免责声明</a>
           <a href="https://api.anyibj.cn/legal/account-deletion">账号注销说明</a>
         </div>
       </section>
@@ -135,7 +170,7 @@
     <footer class="site-footer">
       <div>
         <strong>安忆</strong>
-        <p>云端纪念、人文社区与远程礼祭软件。</p>
+        <p>云端纪念、数字陪伴与远程礼祭软件。</p>
       </div>
       <div class="footer-links">
         <a href="mailto:544908186@qq.com">544908186@qq.com</a>

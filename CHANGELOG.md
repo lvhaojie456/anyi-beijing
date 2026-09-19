@@ -23,23 +23,42 @@
 
 ### 新增
 
-- 无。
+- 官网补回源码并改版。此前 `anyi-memorial-site.pages.dev`（Cloudflare Pages）上跑的那版比仓库里的 `website/` 更新，仓库那份仍停留在“人文社区 / 义工互助”的旧功能表述，两版内容不一致。本次以线上版本为基线还原进仓库，再按当前产品补齐：`index.html` 新增“动态形象与语音”功能卡与整节“语音陪伴”（音色选择、口型跟随、语音条留存、未绑定形象只回文字，并注明文案会发送至腾讯云语音合成），功能卡从 4 张扩到 6 张。新增 `website/_headers`（CSP、`X-Content-Type-Options`、`Referrer-Policy`、`Permissions-Policy` 与 `/assets/*` 一周缓存）与 `website/wrangler.toml`（Pages 项目 `anyi-memorial-site`），此前线上没有任何安全响应头与缓存策略。新增 `website/assets/ai-screen.png` 与 `favicon-256.png`。
+- `website/README.md` 重写：补全 Cloudflare Pages 与腾讯云 CVM 两个部署目标的发布命令、本地预览方式、页面结构，以及“改产品时容易忘的四处同步点”（功能卡文案、截图、下载二维码、客服邮箱）。
+- 新增 `docs/releases/README.md`：五份发布记录的倒序索引（日期、后端提交、Android 版本、制作端目录），以及写新记录的最低要求。
+- `backend/README.md` 补齐此前缺失的接口：语音输出三条（`POST /ai/companions/:id/speech`、`PATCH /ai/companions/:id/voice`、`PATCH /ai/companions/:id/messages/:messageId/audio`）、动态形象绑定与生成任务、制作端内部接口、法律页面、社区删除接口与已停用的 `feature-unlocks` 占位；新增“新增环境变量时”一节，写明 `server/server.ts` 的键名白名单。
 
 ### 修改
 
-- 无。
+- 官网文案与真实产品对齐：首屏说明改为“公开测试版本，功能持续迭代中”；简介、下载段落删除“适合先用于测试、演示和小范围体验”“当前版本仍为测试包”等早期表述；截图段落不再声称“刚从本机模拟器运行的最新版 App 中截取”，并修正为四张图的实际数量；核心功能中“个人设置”一卡的“账号注销”保留、删除已过时的措辞。
+- `website/styles.css`：功能网格由 4 列改为 3 列以容纳 6 张卡，新增 `.voice` / `.voice-points` / `.voice-figure` / `.wave` 样式，波形动画遵循 `prefers-reduced-motion`；`980px` 与 `680px` 断点同步收纳新小节。
+- `website/assets/app-icon.png` 由 1254×1254 / 1,429 KB 压到 512×512 / 262 KB。该图在页面上仅用于 44px 的品牌图标和 favicon，原先占了整个站点体积的一半以上。`website/assets/profile-screen.png` 更新为线上版本（199 KB → 222 KB）。站点总体积由约 2.5 MB 降至 1.2 MB。
+- `.gitignore` 增加 `.wrangler/` 与 `.claude/`：分别是 wrangler 的本地缓存目录和本机工具配置，都不应进仓库。
+- 根 `README.md` 重写：按当前产品列出已上线能力（动态形象、语音回复、生成流水线）与未闭环部分（礼祭、商城、支付），工程目录补上 `tools/`、`store-assets/`、`dist/`，本地开发与发布命令改为 macOS 可直接执行的 bash（原文全是 `D:\Desktop\anyiapp2` 与 PowerShell），文档索引指向新的交接文档与发布记录索引。
+- `docs/codex-handover.md` 重命名为 `docs/handover.md` 并整篇重写：原文停留在 2026-09-13（`versionCode 19`、1.0.17、“工作树有大量未提交变更”），已与现状无关。新版含 2026-09-19 核验的线上状态表、五条必须遵守的规则、Android / 后端 / 制作端代码地图与不变量、四段式发布流程（后端哈希比对与回滚副本、制作端 release 目录切换、安装包签名与 latest 软链、记录归档）、按紧急程度排序的十项已知问题、视频通话的约定首版范围与实施顺序、以及三端测试命令。
+- `docs/tencent-cloud-handover.md`：全部 PowerShell 与 `D:\...\.codex_ssh` 路径改为 bash，私钥与 `known_hosts` 用 `ANYI_SSH_KEY` / `ANYI_KNOWN_HOSTS` 环境变量代指、实际路径不写进仓库；单文件热修段落注明常规发布应走交接文档的整树替换；服务列表标注 `open-llm-vtuber.service` 为退役残留；DNS 排查补充本机解析可能被劫持为 `198.18.x.x` 与 DoH 核对方式；发布验收清单加入 `nginx -T | grep internal/live2d` 检查。
+- `backend/TENCENT_DEPLOY.md`：去掉整目录上传与 2026-05 的 1.0.7 APK 复制命令，改为 `git archive` 打包与按版本命名 + latest 软链；补充 `sites-enabled/anyi-api` 必须是软链的说明；App 打包命令改为 bash。`backend/README.md` 本地开发段落同样改为 bash，并说明 `better-sqlite3` 重建与 SQLite-only 测试的注意点。
+- `docs/live2d-supervisor-plan.md` 状态行由分支名 `feat/live2d-supervisor` 改为实际的 PR #8 / #9 / #11 链接与上线提交 `16cfa9c`。
+- `docs/launch-checklist.md` “已在项目中完成”补上语音输入/输出、动态形象与生成、管理后台与官网地址。
+- `.gitignore` 增加 `dist/`：本机保留的已发布 APK/AAB 从仓库根目录移到 `dist/android/`（1.0.18–1.0.21 共 8 个文件、约 265 MB，不入库；1.0.21 APK 哈希移动后核对不变）。根目录只剩源码、配置与文档。
 
 ### 修复
 
-- 无。
+- 官网四张手机截图的取图说明与实际情况不符，已修正；`robots.txt` 与 `sitemap.xml` 指向的 `https://anyi.anyibj.cn/` 当前**没有 DNS 记录**（解析为 NXDOMAIN），搜索引擎抓取会被拒。本次未改动这两处，待确认该域名是否继续作为官网入口后再定。
+- 文档里所有相对链接经脚本核对无断链；全仓库 Markdown 不再有 Windows 路径、PowerShell 片段或 `.codex_ssh` 引用。
 
 ### 移除
 
-- 无。
+- 删除本地与远程分支 `release/1.0.19`（尖端 `edb5151`，PR #10 已合并为 `bb820dc`）和 `release/1.0.21`（尖端 `4b71bb2`，PR #16 已合并为 `804a24d`）。两者内容均已在 `main`，无独有提交。
+- `docs/codex-handover.md` 移至 `docs/handover.md`（内容重写，见“修改”）。根 `README.md` 的链接已更新；仓库内无其他引用。
 
 ### 运维/部署
 
-- 无。
+- 已在 Cloudflare Pages 生产环境发布（Deployment `eb85d692`，分支 `main`）：`https://anyi-memorial-site.pages.dev`。验证：`/`、`styles.css`、`robots.txt`、`sitemap.xml`、`_headers` 与全部 7 个静态资源均 200；`content-security-policy` 等安全头已在边缘生效，`/assets/app-screen.png` 返回 `cache-control: public, max-age=604800`。发布命令为 `cd website && npx wrangler@latest pages deploy . --project-name anyi-memorial-site --branch main`。
+- 腾讯云 CVM 上的 `/var/www/anyi-memorial-site/` 未同步本次改动，仍是 2026-08-30 的旧版；因 `anyi.anyibj.cn` 已无解析，`anyi-site` vhost 实际不可访问。是否保留该入口待定。
+- 本次未改动 App、后端与制作端，无需数据库迁移、无新增环境变量、无版本号变更。
+- **核验发现线上 Nginx 配置漂移（未处理，待授权）**：`/etc/nginx/sites-enabled/anyi-api` 是 2026-08-31 的独立文件而非软链；2026-09-17 写入 `sites-available/anyi-api` 的制作端配置（`/internal/live2d/` 的 `client_max_body_size 256m`、300 秒超时、通用超时 240 秒；与仓库 `backend/examples/tencent-nginx-node-api.conf` 逐字节一致）从未进入生效配置，`nginx -T` 中没有 `internal/live2d`。制作端上传实际受通用 60 MB / 120 秒限制；日志里 `/internal/live2d` 无 413，最大 `project.zip` 约 16 MB，所以还没出事。修法一行：`sudo ln -sf /etc/nginx/sites-available/anyi-api /etc/nginx/sites-enabled/anyi-api && sudo nginx -t && sudo systemctl reload nginx`。已写入交接文档“已知问题”第一条与验收清单。
+- 本次仓库整理不涉及线上变更。三端测试在整理后全部通过：后端 `npm test` 53 项、Android `:app:testDebugUnitTest` 23 项、制作端 `unittest` 34 项（用生产共用 venv）。
 
 ## 当前发布（2026-09-18 16:00）
 
