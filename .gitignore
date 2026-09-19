@@ -38,6 +38,9 @@ screenshots/
 window-current.xml
 __pycache__/
 temp_generated_assets/
+
+# Local tooling state
+.claude/
 resume_render/
 *.sqlite
 *.db

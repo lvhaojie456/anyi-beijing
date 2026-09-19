@@ -23,6 +23,29 @@
 
 ### 新增
 
+- 无。
+
+### 修改
+
+- 无。
+
+### 修复
+
+- 无。
+
+### 移除
+
+- 无。
+
+### 运维/部署
+
+- 无。
+## 当前发布（2026-09-19）
+
+> Android 1.0.22（versionCode 24）发布，包含本段全部客户端改动。后端与数据库已于 2026-09-19 17:20 随 `main` `f2a5c1e` 上线（见 `docs/releases/2026-09-19-admin-console.md` 与 `docs/releases/2026-09-19-android-1.0.22.md`）；线上安装包此前仍为 1.0.21，本次补齐。
+
+### 新增
+
 - 生成动态形象时必须给形象起名字：`Live2dStudioScreen` 新增“形象名字”输入（1–40 字），随 multipart 字段 `name` 提交并参与幂等哈希；生成记录以名字为标题，完成后的任务可点击铅笔图标改名（`PATCH /ai/live2d/jobs/:id/name`）。后端 `live2d_jobs` 新增可空列 `name`（MySQL `0016_live2d_job_name.sql` / SQLite `0034_live2d_job_name.sql`），创建接口校验名字必填、去控制字符与多余空白、上限 40 字，任务响应新增 `name`。
 - “选择动态形象”对话框新增“我创建的”一组：`GET /ai/companions/:id/live2d/avatars` 返回该对象生成成功的形象（`jobId`、`modelId`、`name`、`previewPath`），选择器按名字和预览图展示，可随时切回以前生成的形象；内置形象移到“内置形象”一组。此前生成成功的形象只能在生成页点“使用此形象”，一旦换成内置形象就再也选不回来。
 - Android `AnyiApiClient` 新增 `listLive2dAvatars`、`renameLive2dJob`；`createLive2dJob` 新增必填 `name` 参数。
@@ -69,6 +92,12 @@
 - 形象缓存：无数据库迁移、无新增环境变量；制作端不受影响。后端只改响应头并新增一个只读接口。验证：后端 `npm test` 53 项通过（Live2D 用例新增清单内容、`Cache-Control`/`ETag`/`Content-Length` 断言与他人 404）；Android `:app:testDebugUnitTest` 27 项通过、lint 无错误。
 - 管理后台重做：无数据库迁移，无环境变量变化。后端部署需要完整执行 `tsc -p tsconfig.node.json`，`backend/src/admin/` 下的新文件必须一起编译进 `dist-node`（沿用现有发布流程即可）。验证：后端 `npm test` 现在 66 项通过（含新增 `tests/admin-console.test.mjs`）。
 - 本次未部署到生产；上线需用户明确授权后按既有流程执行。
+
+### 运维/部署
+
+- Android 版本提升为 `1.0.22`（versionCode 24），沿用 release-v2 签名；在 `main` `f2a5c1e` 之上仅提升版本号后构建，随后合并回 `main`。本次客户端包含 PR #19（沉浸模式语音输入、生成形象须命名、选择器可切回自建形象）、PR #20（生成形象永久缓存到手机私有目录）与 PR #21 的后端管理后台（后端部分已先行上线）。
+- APK 上传为 `/var/www/anyi-downloads/anyi-memorial-1.0.22-release-v2.apk`，`anyi-memorial-latest.apk` 与 `anyi-memorial-release-latest.apk` 切换到该版本；1.0.21 保留供回滚。
+- 回滚：`sudo ln -sfn /var/www/anyi-downloads/anyi-memorial-1.0.21-release-v2.apk /var/www/anyi-downloads/anyi-memorial-latest.apk`（release-latest 同理）。后端回滚见 `docs/releases/2026-09-19-admin-console.md`。
 
 ## 当前发布（2026-09-18 16:00）
 
