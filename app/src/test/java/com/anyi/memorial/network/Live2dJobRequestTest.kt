@@ -23,10 +23,12 @@ class Live2dJobRequestTest {
         server.start()
         try {
             val api=AnyiApiClient("http://127.0.0.1:${server.address.port}") { "test-token" }
-            val result=api.createLive2dJob(id,"",UploadPayload("source.png","image/png",byteArrayOf(1,2,3)),id)
+            val result=api.createLive2dJob(id,"",UploadPayload("source.png","image/png",byteArrayOf(1,2,3)),id,"慈祥的奶奶")
             assertEquals("queued",result.getString("status"))
             assertEquals(id,key);assertEquals("Bearer test-token",token)
             assertTrue(body.contains("filename=\"source.png\""))
+            assertTrue(body.contains("name=\"name\"\r\n\r\n慈祥的奶奶"))
+            assertThrows(IllegalArgumentException::class.java) { api.createLive2dJob(id,"提示词",null,id,"  ") }
         } finally { server.stop(0) }
     }
 

@@ -8,7 +8,7 @@ export class Live2dError extends Error {
 
 type Job = {
   id: string; user_id: string; companion_id: string; request_id: string; request_hash: string;
-  prompt: string; source_key: string | null; status: string; stage: string; progress: number;
+  prompt: string; name: string | null; source_key: string | null; status: string; stage: string; progress: number;
   error_code: string | null; lease_token: string | null; lease_until: string | null;
   attempts: number; created_at: string; updated_at: string;
   diagnosis_code: string | null; suggestion: string | null; retry_hint: string | null; supervisor_summary: string | null;
@@ -27,6 +27,17 @@ function summaryText(value: unknown): string | null {
   // eslint-disable-next-line no-control-regex
   const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
   return cleaned ? cleaned.slice(0, SUMMARY_LIMIT) : null;
+}
+
+const NAME_LIMIT = 40;
+/** User-facing label for a generated avatar. Control characters are stripped; the trimmed value is required. */
+export function jobName(value: unknown): string {
+  if (typeof value !== "string") throw new Live2dError(400, "live2d_name_required");
+  // eslint-disable-next-line no-control-regex
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) throw new Live2dError(400, "live2d_name_required");
+  if (cleaned.length > NAME_LIMIT) throw new Live2dError(400, "live2d_name_too_long");
+  return cleaned;
 }
 
 function whitelisted(value: unknown, allowed: Set<string>): string | null {
@@ -116,7 +127,7 @@ async function leased(c: Context<AppEnv>) {
 
 function serialize(row: Job) {
   return {
-    id: row.id, companionId: row.companion_id, status: row.status, stage: row.stage,
+    id: row.id, companionId: row.companion_id, name: row.name ?? null, status: row.status, stage: row.stage,
     progress: row.progress, errorCode: row.error_code, createdAt: row.created_at, updatedAt: row.updated_at,
     refinementRequired: true, editorCompatibility: "unverified",
     diagnosisCode: row.diagnosis_code ?? null, suggestion: row.suggestion ?? null, summary: row.supervisor_summary ?? null,
@@ -192,12 +203,13 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
     const requestId=safeId(c.req.header("Idempotency-Key") || "");
     const prompt=String(form.get("prompt") || "").trim();
     if (prompt.length>2000) throw new Live2dError(400,"live2d_prompt_too_long");
+    const name=jobName(form.get("name"));
     const input=form.get("file");
     const image=input ? await readImage(input) : null;
     if (!prompt && !image) throw new Live2dError(400,"live2d_input_required");
     if (image && image.size>8*1024*1024) throw new Live2dError(413,"live2d_image_too_large");
     const bytes=image ? new Uint8Array(await image.arrayBuffer()) : null;
-    const requestHash=hash(JSON.stringify([companionId,prompt,bytes ? hash(bytes) : null]));
+    const requestHash=hash(JSON.stringify([companionId,prompt,name,bytes ? hash(bytes) : null]));
     const existing=await c.env.DB.prepare("SELECT * FROM live2d_jobs WHERE user_id = ? AND request_id = ?")
       .bind(c.get("user").id,requestId).first<Job>();
     if (existing) {
@@ -213,8 +225,8 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
     if (bytes) await storeAsset(c,row,sourceKey!,bytes,image!.type);
     try {
       await c.env.DB.prepare(`INSERT INTO live2d_jobs
-        (id,user_id,companion_id,request_id,request_hash,prompt,source_key,active_key,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(id,row.user_id,companionId,requestId,requestHash,prompt,sourceKey,companionId,now(),now()).run();
+        (id,user_id,companion_id,request_id,request_hash,prompt,name,source_key,active_key,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(id,row.user_id,companionId,requestId,requestHash,prompt,name,sourceKey,companionId,now(),now()).run();
     } catch (error) {
       if (sourceKey) {
         await c.env.ASSETS.delete(sourceKey);
@@ -228,6 +240,24 @@ export function registerLive2dRoutes(app: Hono<AppEnv>, auth: MiddlewareHandler<
       throw error;
     }
     return c.json({job:serialize(await job(c,id))},202);
+  });
+
+  // Succeeded generations for this companion, in the shape the avatar picker needs.
+  app.get("/ai/companions/:id/live2d/avatars",auth,async c => {
+    await companion(c,c.req.param("id"));
+    const rows=await c.env.DB.prepare("SELECT * FROM live2d_jobs WHERE companion_id = ? AND user_id = ? AND status = 'succeeded' ORDER BY updated_at DESC LIMIT 20")
+      .bind(c.req.param("id"),c.get("user").id).all<Job>();
+    return c.json({avatars:rows.results.map(row => ({
+      jobId:row.id, modelId:`generated:${row.id}`, name:row.name ?? null,
+      previewPath:`/ai/live2d/jobs/${row.id}/files/preview.png`, createdAt:row.created_at
+    }))});
+  });
+  app.patch("/ai/live2d/jobs/:id/name",auth,async c => {
+    const row=await job(c,c.req.param("id"));
+    const body=await c.req.json().catch(()=>({})) as Record<string,unknown>;
+    const name=jobName(body?.name);
+    await c.env.DB.prepare("UPDATE live2d_jobs SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?").bind(name,now(),row.id,row.user_id).run();
+    return c.json({job:serialize(await job(c,row.id))});
   });
 
   app.post("/ai/live2d/jobs/:id/cancel",auth,async c => {

@@ -14,6 +14,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.*
@@ -38,7 +39,8 @@ import java.util.UUID
 
 private data class Live2dJob(
     val id: String, val status: String, val stage: String, val progress: Int,
-    val diagnosisCode: String? = null, val suggestion: String? = null, val summary: String? = null
+    val diagnosisCode: String? = null, val suggestion: String? = null, val summary: String? = null,
+    val name: String? = null
 ) {
     val active get() = status == "queued" || status == "running"
 }
@@ -47,7 +49,8 @@ private fun parseLive2dJob(item: org.json.JSONObject) = Live2dJob(
     item.getString("id"), item.getString("status"), item.getString("stage"), item.optInt("progress"),
     item.optString("diagnosisCode").takeIf { it.isNotEmpty() && !item.isNull("diagnosisCode") },
     item.optString("suggestion").takeIf { it.isNotEmpty() && !item.isNull("suggestion") },
-    item.optString("summary").takeIf { it.isNotEmpty() && !item.isNull("summary") }
+    item.optString("summary").takeIf { it.isNotEmpty() && !item.isNull("summary") },
+    item.optString("name").takeIf { it.isNotEmpty() && !item.isNull("name") }
 )
 
 @Composable
@@ -55,6 +58,7 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var prompt by rememberSaveable(companion.id) { mutableStateOf("") }
+    var avatarName by rememberSaveable(companion.id) { mutableStateOf("") }
     var mode by rememberSaveable(companion.id) { mutableStateOf("prompt") }
     var requestId by rememberSaveable(companion.id) { mutableStateOf(UUID.randomUUID().toString()) }
     var file by remember(companion.id) { mutableStateOf<UploadPayload?>(null) }
@@ -63,6 +67,7 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var downloadId by rememberSaveable { mutableStateOf<String?>(null) }
+    var renameTarget by remember { mutableStateOf<Live2dJob?>(null) }
     var previewId by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
 
@@ -115,6 +120,32 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
             busy = false
         }
     }
+    fun rename(target: Live2dJob, name: String) {
+        if (busy) return
+        busy = true; error = ""
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { api.renameLive2dJob(target.id, name) } }
+                .onSuccess { updated ->
+                    val renamed = parseLive2dJob(updated)
+                    jobs = jobs.map { if (it.id == renamed.id) renamed else it }
+                    renameTarget = null
+                }.onFailure { error = studioError(it) }
+            busy = false
+        }
+    }
+    renameTarget?.let { target ->
+        var draft by remember(target.id) { mutableStateOf(target.name.orEmpty()) }
+        AlertDialog(
+            onDismissRequest = { if (!busy) renameTarget = null },
+            title = { Text("形象名字") },
+            text = {
+                OutlinedTextField(draft, { draft = it.take(40) }, Modifier.fillMaxWidth(), singleLine = true,
+                    enabled = !busy, placeholder = { Text("例如：奶奶、小时候的爸爸") })
+            },
+            confirmButton = { TextButton(onClick = { rename(target, draft.trim()) }, enabled = !busy && draft.isNotBlank()) { Text("保存") } },
+            dismissButton = { TextButton(onClick = { renameTarget = null }, enabled = !busy) { Text("取消") } }
+        )
+    }
     BackHandler { if (previewId != null) previewId = null else onBack() }
     if (previewId != null) {
         Column(Modifier.fillMaxSize().background(Color(0xFFF3F5F4)).statusBarsPadding()) {
@@ -140,6 +171,11 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
             }
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(companion.displayName, color = Color(0xFF557466), fontSize = 14.sp)
+                OutlinedTextField(avatarName, {
+                    avatarName = it.take(40); requestId = UUID.randomUUID().toString()
+                }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true,
+                    label = { Text("形象名字") }, placeholder = { Text("例如：奶奶、小时候的爸爸") },
+                    supportingText = { Text("会显示在“选择动态形象”里，方便以后认出来") })
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     for ((id, title) in listOf("prompt" to "提示词", "image" to "图片")) {
                         FilterChip(selected = mode == id, onClick = { mode = id; requestId = UUID.randomUUID().toString() }, label = { Text(title) }, enabled = !busy)
@@ -166,7 +202,7 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
                     val sentPrompt = if (mode == "prompt") prompt else ""
                     val sentFile = if (mode == "image") file else null
                     scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { api.createLive2dJob(companion.id, sentPrompt, sentFile, requestId) } }
+                        runCatching { withContext(Dispatchers.IO) { api.createLive2dJob(companion.id, sentPrompt, sentFile, requestId, avatarName.trim()) } }
                             .onSuccess { submitted ->
                                 val created = parseLive2dJob(submitted)
                                 jobs = listOf(created) + jobs.filterNot { it.id == created.id }
@@ -175,7 +211,7 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
                             .onFailure { error = studioError(it) }
                         busy = false
                     }
-                }, enabled = enabled == true && !busy && jobs.none { it.active } &&
+                }, enabled = enabled == true && !busy && jobs.none { it.active } && avatarName.isNotBlank() &&
                     (if (mode == "prompt") prompt.isNotBlank() else file != null), modifier = Modifier.fillMaxWidth()) {
                     if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     else Text("生成可精修初版")
@@ -185,7 +221,13 @@ internal fun Live2dStudioScreen(api: AnyiApiClient, companion: AiCompanion, onBa
         }
         items(jobs, key = { it.id }) { job ->
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stageTitle(job.status, job.stage), fontSize = 15.sp)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(job.name ?: "未命名形象", fontSize = 16.sp, color = Color(0xFF1D1D1F))
+                        Text(stageTitle(job.status, job.stage), fontSize = 13.sp, color = Color(0xFF557466))
+                    }
+                    if (!job.active) IconButton(onClick = { renameTarget = job }, enabled = !busy) { Icon(Icons.Rounded.Edit, "修改名字") }
+                }
                 if (job.active) {
                     LinearProgressIndicator(progress = { job.progress / 100f }, modifier = Modifier.fillMaxWidth())
                     Text("${job.progress}%", fontSize = 12.sp)
@@ -246,6 +288,8 @@ private fun studioError(error: Throwable): String = when ((error as? AnyiApiExce
     "live2d_not_configured" -> "生成服务未开启"
     "live2d_job_already_active" -> "这个对象已有生成任务"
     "live2d_daily_limit" -> "今天的生成任务已达上限"
+    "live2d_name_required" -> "请先给形象起个名字"
+    "live2d_name_too_long" -> "形象名字最多 40 个字"
     else -> "操作未完成，请刷新状态后重试"
 }
 

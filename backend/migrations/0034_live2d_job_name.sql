@@ -1,0 +1,1 @@
+ALTER TABLE live2d_jobs ADD COLUMN name TEXT;

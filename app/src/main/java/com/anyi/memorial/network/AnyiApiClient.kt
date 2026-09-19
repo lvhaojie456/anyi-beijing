@@ -175,12 +175,24 @@ class AnyiApiClient(
     fun listLive2dJobs(companionId: String): JSONArray =
         request("GET", "/ai/companions/$companionId/live2d/jobs", authorized = true).getJSONArray("jobs")
 
-    fun createLive2dJob(companionId: String, prompt: String, file: UploadPayload?, requestId: String): JSONObject {
+    fun createLive2dJob(companionId: String, prompt: String, file: UploadPayload?, requestId: String, name: String): JSONObject {
         require(prompt.isNotBlank() || file != null) { "live2d_input_required" }
+        require(name.isNotBlank()) { "live2d_name_required" }
         return multipartRequest(
             path = "/ai/companions/$companionId/live2d/jobs",
-            fields = mapOf("prompt" to prompt), files = listOfNotNull(file), idempotencyKey = requestId
+            fields = mapOf("prompt" to prompt, "name" to name), files = listOfNotNull(file), idempotencyKey = requestId
         ).getJSONObject("job")
+    }
+
+    /** Succeeded generations for the companion, newest first, for the avatar picker. */
+    fun listLive2dAvatars(companionId: String): JSONArray =
+        request("GET", "/ai/companions/$companionId/live2d/avatars", authorized = true).getJSONArray("avatars")
+
+    fun renameLive2dJob(jobId: String, name: String): JSONObject {
+        require(jobId.matches(Regex("[a-f0-9-]{36}")))
+        require(name.isNotBlank()) { "live2d_name_required" }
+        return request("PATCH", "/ai/live2d/jobs/$jobId/name", authorized = true, body = JSONObject().put("name", name))
+            .getJSONObject("job")
     }
 
     fun live2dJobAction(jobId: String, action: String, hint: String? = null): JSONObject {
