@@ -2194,8 +2194,20 @@ app.patch("/ai/companions/:id/live2d", requireAuth, async (c) => {
   const companion = await loadAiCompanionRow(c, c.req.param("id"));
   const user = c.get("user");
   const body = await parseJson(c);
-  const raw = readString(body, "live2dModel", { max: 32 });
+  const raw = readString(body, "live2dModel", { max: 48 });
   const live2dModel = raw ? raw.trim().toLowerCase() : null;
+  const generated = live2dModel?.match(/^generated:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/)?.[1] ?? null;
+  if (generated) {
+    // Re-binding an earlier generation: it must be this companion's own succeeded job.
+    const row = await c.env.DB.prepare(
+      "SELECT id FROM live2d_jobs WHERE id = ? AND companion_id = ? AND user_id = ? AND status = 'succeeded'"
+    ).bind(generated, companion.id, user.id).first();
+    if (!row) throw new ApiError(400, "live2d_model_not_supported", { allowed: [...live2dModelIds] });
+    await c.env.DB.prepare(
+      "UPDATE ai_companions SET live2d_model = NULL, live2d_job_id = ?, updated_at = ? WHERE id = ? AND user_id = ?"
+    ).bind(generated, new Date().toISOString(), companion.id, user.id).run();
+    return c.json({ companion: serializeAiCompanion(await loadAiCompanionRow(c, companion.id)) });
+  }
   if (live2dModel !== null && !live2dModelIds.has(live2dModel)) {
     throw new ApiError(400, "live2d_model_not_supported", { allowed: [...live2dModelIds] });
   }

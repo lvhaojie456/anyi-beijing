@@ -85,6 +85,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -127,11 +128,11 @@ private const val voiceConsentStoreName = "anyi_voice_consent"
 private const val voiceConsentKey = "voice_message_consent_2026_09_01"
 private const val maxVoiceDurationMs = 60_000L
 
-private fun hasVoiceMessageConsent(context: Context): Boolean =
+internal fun hasVoiceMessageConsent(context: Context): Boolean =
     context.getSharedPreferences(voiceConsentStoreName, Context.MODE_PRIVATE)
         .getBoolean(voiceConsentKey, false)
 
-private fun saveVoiceMessageConsent(context: Context): Boolean =
+internal fun saveVoiceMessageConsent(context: Context): Boolean =
     context.getSharedPreferences(voiceConsentStoreName, Context.MODE_PRIVATE)
         .edit()
         .putBoolean(voiceConsentKey, true)
@@ -210,13 +211,13 @@ private data class PendingAiMessage(
     val uploadRequestId: String? = null
 )
 
-private data class VoiceRecording(
+internal data class VoiceRecording(
     val companionId: String,
     val file: File,
     val durationMs: Long
 )
 
-private class VoiceRecorder(private val context: android.content.Context) {
+internal class VoiceRecorder(private val context: android.content.Context) {
     private var recorder: MediaRecorder? = null
     private var outputFile: File? = null
     private var activeCompanionId: String? = null
@@ -286,7 +287,7 @@ private class VoiceRecorder(private val context: android.content.Context) {
 }
 
 /** A single player shared by the chat screen, matching WeChat's one-at-a-time playback. */
-private class VoicePlaybackController {
+internal class VoicePlaybackController {
     var playingMessageId by mutableStateOf<String?>(null)
         private set
     private var player: MediaPlayer? = null
@@ -374,7 +375,7 @@ private data class AiConversationState(
     val error: String = ""
 )
 
-private const val maxQueuedAiMessages = 20
+internal const val maxQueuedAiMessages = 20
 
 private data class AiCompanionMemory(val id: String, val content: String)
 private data class AiImageModel(val id: String, val name: String)
@@ -872,6 +873,8 @@ internal fun AiCompanionScreen(
                             selectedId?.let { id -> updateConversationState(id) { state -> state.copy(draft = draft.take(500)) } }
                         },
                         onSend = ::sendMessage,
+                        voiceAvailable = voiceAvailable,
+                        onVoiceRecorded = ::sendVoice,
                         onChangeAvatar = { showLive2dPicker = true }
                     )
                 } else CompanionChat(
@@ -906,6 +909,8 @@ internal fun AiCompanionScreen(
 
     if (showLive2dPicker && selected != null) {
         Live2dPickerDialog(
+            api = api,
+            companion = selected,
             current = selected.live2dModel,
             saving = live2dSaving,
             onDismiss = { if (!live2dSaving) showLive2dPicker = false },
@@ -1364,32 +1369,39 @@ private fun CompanionChat(
         }
     }
     if (showVoicePermissionInfo) {
-        AlertDialog(
-            onDismissRequest = { showVoicePermissionInfo = false },
-            title = { Text("需要麦克风权限") },
-            text = {
-                Text(
-                    "安忆只会在你按住“说话”时使用麦克风，不会后台录音。你发送的录音会上传为本人可读的私有语音消息，并交由隐私政策中公示的语音识别服务商转成文字；AI 只接收转写文字并用文字回复。"
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showVoicePermissionInfo = false
-                    if (saveVoiceMessageConsent(context)) {
-                        voiceConsentAccepted = true
-                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    } else {
-                        voiceError = "语音授权记录保存失败，请重试"
-                    }
-                }) { Text("允许") }
-            },
-            dismissButton = { TextButton(onClick = { showVoicePermissionInfo = false }) { Text("暂不") } }
+        VoicePermissionDialog(
+            onDismiss = { showVoicePermissionInfo = false },
+            onAllow = {
+                showVoicePermissionInfo = false
+                if (saveVoiceMessageConsent(context)) {
+                    voiceConsentAccepted = true
+                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    voiceError = "语音授权记录保存失败，请重试"
+                }
+            }
         )
     }
 }
 
+/** First-use microphone disclosure; the same wording is shown in the normal and immersive chats. */
 @Composable
-private fun VoiceRecordButton(
+internal fun VoicePermissionDialog(onDismiss: () -> Unit, onAllow: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("需要麦克风权限") },
+        text = {
+            Text(
+                "安忆只会在你按住“说话”时使用麦克风，不会后台录音。你发送的录音会上传为本人可读的私有语音消息，并交由隐私政策中公示的语音识别服务商转成文字；AI 只接收转写文字并用文字回复。"
+            )
+        },
+        confirmButton = { TextButton(onClick = onAllow) { Text("允许") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("暂不") } }
+    )
+}
+
+@Composable
+internal fun VoiceRecordButton(
     enabled: Boolean,
     recording: Boolean,
     modifier: Modifier = Modifier,
@@ -1436,7 +1448,7 @@ private fun VoiceRecordButton(
         Box(contentAlignment = Alignment.Center) {
             Text(
                 if (recording) "松开发送" else "按住说话",
-                color = if (recording) Color.White else CompanionInk,
+                color = if (recording) Color.White else Color(0xFF1D1D1F),
                 fontWeight = FontWeight.Bold
             )
         }
@@ -2010,7 +2022,7 @@ private fun parseMessageResponse(response: JSONObject): List<AiConversationMessa
     return response.optJSONObject("voiceMessage")?.let { parseMessages(JSONArray().put(it)) }.orEmpty()
 }
 
-private fun formatVoiceDuration(durationMs: Long?): String {
+internal fun formatVoiceDuration(durationMs: Long?): String {
     val seconds = ((durationMs ?: 0L) / 1000L).coerceAtLeast(1L)
     return "${seconds}s"
 }
@@ -2095,18 +2107,41 @@ private fun VoicePickerDialog(current: String?, saving: Boolean, onDismiss: () -
     )
 }
 
+/** One of the user's own succeeded generations, as listed by GET /ai/companions/:id/live2d/avatars. */
+internal data class GeneratedLive2dAvatar(val jobId: String, val modelId: String, val name: String?, val previewPath: String)
+
+internal fun parseGeneratedAvatars(array: JSONArray): List<GeneratedLive2dAvatar> = List(array.length()) { index ->
+    val item = array.optJSONObject(index) ?: JSONObject()
+    GeneratedLive2dAvatar(
+        jobId = item.optString("jobId"),
+        modelId = item.optString("modelId"),
+        name = item.optString("name").takeIf { it.isNotBlank() && !item.isNull("name") },
+        previewPath = item.optString("previewPath")
+    )
+}.filter { generatedLive2dJobId(it.modelId) == it.jobId && it.jobId.isNotBlank() }
+
 /**
- * Grid of bundled Live2D avatars. Picking one calls onPick(modelId); the
- * "不使用" tile calls onPick(null) to unbind.
+ * Picker for the companion's avatar: the user's own generated avatars first
+ * (named, with preview), then the bundled catalogue. Picking calls
+ * onPick(modelId); the "不使用" button calls onPick(null) to unbind.
  */
 @Composable
 private fun Live2dPickerDialog(
+    api: AnyiApiClient,
+    companion: AiCompanion,
     current: String?,
     saving: Boolean,
     onDismiss: () -> Unit,
     onCreate: () -> Unit,
     onPick: (String?) -> Unit
 ) {
+    var generated by remember(companion.id) { mutableStateOf<List<GeneratedLive2dAvatar>?>(null) }
+    var generatedError by remember(companion.id) { mutableStateOf(false) }
+    LaunchedEffect(companion.id) {
+        runCatching { withContext(Dispatchers.IO) { parseGeneratedAvatars(api.listLive2dAvatars(companion.id)) } }
+            .onSuccess { generated = it; generatedError = false }
+            .onFailure { generated = emptyList(); generatedError = true }
+    }
     Dialog(onDismissRequest = onDismiss) {
         Surface(Modifier.fillMaxWidth().padding(16.dp), color = CompanionPaper, shape = RoundedCornerShape(16.dp), shadowElevation = 12.dp) {
             Column(Modifier.padding(18.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2118,6 +2153,28 @@ private fun Live2dPickerDialog(
                     "形象会绑定到这个陪伴对象，进入沉浸模式后在聊天上方显示。所有形象均为 AI 生成，不代表任何真实人物。",
                     color = CompanionMuted, fontSize = 12.sp
                 )
+                val mine = generated
+                if (mine == null) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(18.dp), color = CompanionGreen, strokeWidth = 2.dp)
+                    }
+                } else if (mine.isNotEmpty()) {
+                    Text("我创建的", color = CompanionInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    mine.chunked(2).forEach { pair ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            pair.forEach { avatar ->
+                                GeneratedAvatarTile(
+                                    api = api, avatar = avatar, active = avatar.modelId == current, enabled = !saving,
+                                    modifier = Modifier.weight(1f), onClick = { onPick(avatar.modelId) }
+                                )
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                    Text("内置形象", color = CompanionInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                } else if (generatedError) {
+                    Text("我创建的形象暂时读不到，可以先选内置形象", color = CompanionMuted, fontSize = 12.sp)
+                }
                 Live2dCatalog.models.chunked(2).forEach { pair ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         pair.forEach { model ->
@@ -2158,6 +2215,55 @@ private fun Live2dPickerDialog(
                     }
                 }
             }
+        }
+    }
+}
+
+/** A generated avatar in the picker: preview image, user-given name, current marker. */
+@Composable
+private fun GeneratedAvatarTile(
+    api: AnyiApiClient,
+    avatar: GeneratedLive2dAvatar,
+    active: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    var preview by remember(avatar.jobId) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(avatar.jobId) {
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val bytes = api.readLive2dFile(avatar.jobId, "preview.png")
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }
+        }.onSuccess { preview = it }
+    }
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        color = if (active) CompanionGreen.copy(alpha = 0.14f) else Color.White,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, if (active) CompanionGreen else CompanionLine)
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(
+                Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFFF1EFE8)),
+                contentAlignment = Alignment.Center
+            ) {
+                val image = preview
+                if (image != null) {
+                    ComposeImage(bitmap = image, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                } else {
+                    Icon(Icons.Rounded.Face, null, tint = CompanionMuted)
+                }
+            }
+            Text(
+                avatar.name ?: "我的形象", color = CompanionInk, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            Text("AI 生成 · 待精修", color = CompanionMuted, fontSize = 11.sp)
+            if (active) Text("当前使用", color = CompanionGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

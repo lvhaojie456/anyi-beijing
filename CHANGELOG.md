@@ -23,11 +23,17 @@
 
 ### 新增
 
-- 无。
+- 生成动态形象时必须给形象起名字：`Live2dStudioScreen` 新增“形象名字”输入（1–40 字），随 multipart 字段 `name` 提交并参与幂等哈希；生成记录以名字为标题，完成后的任务可点击铅笔图标改名（`PATCH /ai/live2d/jobs/:id/name`）。后端 `live2d_jobs` 新增可空列 `name`（MySQL `0016_live2d_job_name.sql` / SQLite `0034_live2d_job_name.sql`），创建接口校验名字必填、去控制字符与多余空白、上限 40 字，任务响应新增 `name`。
+- “选择动态形象”对话框新增“我创建的”一组：`GET /ai/companions/:id/live2d/avatars` 返回该对象生成成功的形象（`jobId`、`modelId`、`name`、`previewPath`），选择器按名字和预览图展示，可随时切回以前生成的形象；内置形象移到“内置形象”一组。此前生成成功的形象只能在生成页点“使用此形象”，一旦换成内置形象就再也选不回来。
+- Android `AnyiApiClient` 新增 `listLive2dAvatars`、`renameLive2dJob`；`createLive2dJob` 新增必填 `name` 参数。
 
 ### 修改
 
-- 无。
+- 沉浸模式（`Live2dChatScreen`）补上语音输入：服务器开启语音时显示麦克风/键盘切换按钮，按住说话、上滑取消、60 秒自动停止、首次使用弹出与普通聊天相同的麦克风说明并记录同一份同意，录音进入同一条 `sendVoice` 队列。语音条在沉浸模式里改为可点击回放（此前只显示“[语音]”文字），并显示时长、排队中/发送失败状态；开始录音或回放语音条时先停掉形象正在播放的回复语音，避免麦克风录进 TTS 或两路声音重叠。录音期间返回与更换形象按钮禁用。
+- 为了让沉浸模式复用同一套语音实现，`AiCompanionScreen` 里的 `VoiceRecording`、`VoiceRecorder`、`VoicePlaybackController`、`VoiceRecordButton`、麦克风同意读写、`formatVoiceDuration`、`maxQueuedAiMessages` 由 `private` 改为 `internal`，麦克风说明对话框抽成 `VoicePermissionDialog`；普通聊天行为不变。
+- 后端 `PATCH /ai/companions/:id/live2d` 除内置 id 外，接受本对象自己生成成功的 `generated:<jobId>`（校验 `live2d_jobs.companion_id`、`user_id` 与 `status='succeeded'`，其它一律 400 `live2d_model_not_supported`）；`live2dModel` 字段长度上限由 32 放宽到 48 以容纳该格式。
+- `docs/live2d-generation.md` App 工作流与接口表同步（起名、我创建的形象、沉浸模式语音）。
+- 新增 `app/src/debug/res/xml/network_security_config.xml`：仅 debug 构建允许对 `10.0.2.2`、`127.0.0.1`、`localhost` 走明文 HTTP，让模拟器调试包能连本机 `start-live2d-local.mjs` 的隔离 API（此前 `docs/live2d-generation.md` 写的 `-PANYI_API_BASE_URL=http://10.0.2.2:8789` 实际会被 `cleartextTrafficPermitted="false"` 拦下）。release 构建仍用 `src/main` 的配置，全域禁止明文。
 
 ### 修复
 
@@ -39,7 +45,9 @@
 
 ### 运维/部署
 
-- 无。
+- 迁移 MySQL `0016_live2d_job_name.sql` / SQLite `0034_live2d_job_name.sql`：`live2d_jobs` 加可空列 `name`，服务启动时自动应用；回滚 `ALTER TABLE live2d_jobs DROP COLUMN name` 即可。线上现有 2 个已成功任务没有名字，选择器里显示为“我的形象”，用户可在生成记录里改名。
+- 无新增环境变量。制作端不读取 `name`，无需切换。
+- 验证：后端 `npm test` 53 项通过（Live2D 用例新增名字必填/长度/控制字符、幂等哈希含名字、形象列表、改名鉴权、生成形象重新绑定与他人任务拒绝）；Android `:app:testDebugUnitTest` 23 项通过（`Live2dJobRequestTest` 校验 multipart 含 `name` 字段、空名字在客户端即拒绝）。
 
 ## 当前发布（2026-09-18 16:00）
 

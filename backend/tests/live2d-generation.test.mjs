@@ -46,8 +46,9 @@ test('Live2D queue ownership, idempotency, lease fencing, validation and binding
     const result=await req('/auth/register',{method:'POST',body});
     assert.equal(result.status,201,JSON.stringify(result.data));return result.data.token;
   }
-  async function submit(companion,token,key,prompt='全身人物',withImage=false) {
+  async function submit(companion,token,key,prompt='全身人物',withImage=false,name='慈祥的奶奶') {
     const body=new FormData();body.set('prompt',prompt);
+    if(name!==null)body.set('name',name);
     if(withImage)body.set('file',new File([png],'source.png',{type:'image/png'}));
     return req(`/ai/companions/${companion}/live2d/jobs`,{token,method:'POST',body,key});
   }
@@ -63,6 +64,12 @@ test('Live2D queue ownership, idempotency, lease fencing, validation and binding
     const id=results[0].data.job.id;
     assert.equal(id,results[1].data.job.id);
     assert.equal((await submit(companion,owner,key,'另一个人物')).status,409);
+    assert.equal(results[0].data.job.name,'慈祥的奶奶');
+    // The name is required, trimmed, control-stripped and capped at 40 chars; it is part of the idempotency hash.
+    assert.equal((await submit(companion,owner,randomUUID(),'全身人物',false,null)).status,400);
+    assert.equal((await submit(companion,owner,randomUUID(),'全身人物',false,'   ')).status,400);
+    assert.equal((await submit(companion,owner,randomUUID(),'全身人物',false,'长'.repeat(41))).status,400);
+    assert.equal((await submit(companion,owner,key,'全身人物',true,'另一个名字')).status,409);
     assert.equal((await submit(companion,other,randomUUID())).status,404);
     assert.equal((await req(`/ai/live2d/jobs/${id}`,{token:other})).status,404);
     const claimed=await req('/internal/live2d/jobs/claim',{token:workerToken,method:'POST',body:{}});
@@ -102,6 +109,20 @@ test('Live2D queue ownership, idempotency, lease fencing, validation and binding
     assert.equal((await req(`/ai/companions/${companion}`,{token:owner})).data.companion.live2dModel,'generated:'+id);
     await req(`/ai/companions/${companion}/live2d`,{token:owner,method:'PATCH',body:{live2dModel:'kei'}});
     assert.equal((await req(`/ai/companions/${companion}`,{token:owner})).data.companion.live2dModel,'kei');
+    // The picker lists this companion's succeeded generations with their names and previews.
+    const avatars=(await req(`/ai/companions/${companion}/live2d/avatars`,{token:owner})).data.avatars;
+    assert.equal(avatars.length,1);
+    assert.deepEqual([avatars[0].jobId,avatars[0].modelId,avatars[0].name,avatars[0].previewPath],[id,'generated:'+id,'慈祥的奶奶',`/ai/live2d/jobs/${id}/files/preview.png`]);
+    assert.equal((await req(`/ai/companions/${companion}/live2d/avatars`,{token:other})).status,404);
+    // Renaming is owner-only and validated like creation.
+    assert.equal((await req(`/ai/live2d/jobs/${id}/name`,{token:other,method:'PATCH',body:{name:'偷改'}})).status,404);
+    assert.equal((await req(`/ai/live2d/jobs/${id}/name`,{token:owner,method:'PATCH',body:{name:'\u0007  '}})).status,400);
+    assert.equal((await req(`/ai/live2d/jobs/${id}/name`,{token:owner,method:'PATCH',body:{name:'  奶奶\u0007 二号  '}})).data.job.name,'奶奶 二号');
+    // A generated avatar can be picked again through the same PATCH the bundled ones use, but only the owner's own succeeded job.
+    assert.equal((await req(`/ai/companions/${companion}/live2d`,{token:owner,method:'PATCH',body:{live2dModel:'generated:'+id}})).status,200);
+    assert.equal((await req(`/ai/companions/${companion}`,{token:owner})).data.companion.live2dModel,'generated:'+id);
+    assert.equal((await req(`/ai/companions/${companion}/live2d`,{token:owner,method:'PATCH',body:{live2dModel:'generated:'+randomUUID()}})).status,400);
+    await req(`/ai/companions/${companion}/live2d`,{token:owner,method:'PATCH',body:{live2dModel:'kei'}});
     raw.exec("CREATE TRIGGER fail_companion_delete BEFORE DELETE ON ai_companions BEGIN SELECT RAISE(ABORT, 'simulated delete failure'); END");
     const failedDelete=await req(`/ai/companions/${companion}`,{token:owner,method:'DELETE'});
     assert.equal(failedDelete.status,500);

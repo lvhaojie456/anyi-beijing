@@ -4,7 +4,11 @@
 
 Android：AI 陪伴 → 进入对象聊天 → 更多 → 选择/更换动态形象 → 创建我的动态形象。
 
-用户选择提示词或图片后提交任务；页面轮询进度，离开页面不会取消制作。任务成功后可以预览、通过系统文件选择器下载精修 ZIP，或“使用此形象”进入同一对象的沉浸聊天。失败与取消任务可以重试；同一对象同时只能有一个生成任务。内置模型选择和解绑仍然保留。
+用户先给形象起一个名字（1–40 字，必填），再选择提示词或图片提交任务；页面轮询进度，离开页面不会取消制作。任务成功后可以预览、通过系统文件选择器下载精修 ZIP，或“使用此形象”进入同一对象的沉浸聊天。生成记录里可以随时修改名字。失败与取消任务可以重试；同一对象同时只能有一个生成任务。
+
+“选择动态形象”对话框分两组：上面是这个对象自己生成成功的形象（显示名字与预览图，可随时切回），下面是内置形象；两组用同一个 `PATCH /ai/companions/:id/live2d` 绑定，生成形象只接受本对象自己成功过的任务。解绑仍然保留。
+
+沉浸模式的输入栏与普通聊天一致：服务器开启语音输入时有麦克风切换按钮，按住说话、上滑取消，录音走同一条 `POST /ai/companions/:id/voice-messages` 队列；语音条在沉浸模式里可以点击回放，开始录音或回放时会先停掉形象正在播放的回复语音。
 
 本次只接 Android 与共享后端。
 
@@ -28,8 +32,10 @@ Mac 制作端（tools/live2d-worker）
 | 方法与路径 | 用途 |
 | --- | --- |
 | GET /ai/live2d/config | 生成开关 |
-| POST /ai/companions/:id/live2d/jobs | multipart prompt 或 file，必带 UUID Idempotency-Key |
-| GET /ai/companions/:id/live2d/jobs | 对象最近 20 项任务 |
+| POST /ai/companions/:id/live2d/jobs | multipart `name`（必填，≤ 40 字）加 prompt 或 file，必带 UUID Idempotency-Key；`name` 参与幂等哈希 |
+| GET /ai/companions/:id/live2d/jobs | 对象最近 20 项任务，每项含 `name` |
+| GET /ai/companions/:id/live2d/avatars | 对象生成成功的形象（`jobId`、`modelId`、`name`、`previewPath`），供选择器使用 |
+| PATCH /ai/live2d/jobs/:id/name | 修改形象名字，校验同创建 |
 | GET /ai/live2d/jobs/:id | 单项状态和进度 |
 | POST /ai/live2d/jobs/:id/cancel | 取消未完成任务 |
 | POST /ai/live2d/jobs/:id/retry | 重试失败或取消任务；可带 `{"hint":"regenerate_image"}`，制作端据此放弃旧图片重新生成 |

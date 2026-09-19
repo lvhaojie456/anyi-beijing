@@ -1,0 +1,2 @@
+ALTER TABLE live2d_jobs
+  ADD COLUMN name VARCHAR(40) NULL AFTER prompt;
